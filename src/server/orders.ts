@@ -48,7 +48,12 @@ export function toView(order: OrderDoc, balance: Balance, now: Date): OrderView 
   };
 }
 
-/** Never throws on malformed input — an unparseable id is simply not found. */
+/**
+ * Never throws on malformed input — an unparseable id is simply not found.
+ * `ObjectId.isValid` also returns true for a 12-byte Buffer, not just a 24-char
+ * hex string, so callers must pass a string. Route params always are; a
+ * loosely-typed request body value is not guaranteed to be.
+ */
 export function toObjectId(id: string): ObjectId | null {
   return ObjectId.isValid(id) ? new ObjectId(id) : null;
 }
@@ -67,9 +72,12 @@ export async function nextOrderRef(userId: ObjectId): Promise<string> {
   return `ORD-${1000 + (counter?.orderSeq ?? 1)}`;
 }
 
-export async function createOrder(userId: ObjectId, input: CreateOrderInput): Promise<OrderView> {
+export async function createOrder(
+  userId: ObjectId,
+  input: CreateOrderInput,
+  now = new Date(),
+): Promise<OrderView> {
   const totals = computeTotals(input.lines);
-  const now = new Date();
   const doc: OrderDoc = {
     _id: new ObjectId(),
     userId,
@@ -84,9 +92,21 @@ export async function createOrder(userId: ObjectId, input: CreateOrderInput): Pr
     deletedAt: null,
   };
   await (await orders()).insertOne(doc);
+
+  // Best-effort, deliberately. The order is the write that matters; the audit row
+  // is metadata about it, and no money has moved on an order with no settlements.
+  // Failing the call here would tell the client the order was not created when it
+  // was, and a retry would produce a duplicate — strictly worse than a missing
+  // audit line.
+  // ponytail: log-and-continue. If audit completeness ever becomes a hard
+  // requirement, the fix is an outbox row written in the same insert, drained
+  // separately — not a transaction, which would not survive the append-only model.
   await recordAudit(userId, doc._id, 'order.created', {
     totalMinor: doc.totalMinor, lineCount: doc.lines.length,
+  }).catch((error) => {
+    console.error('audit write failed for order.created', { orderId: doc._id.toHexString(), error });
   });
+
   return toView(doc, ZERO_BALANCE, now);
 }
 
