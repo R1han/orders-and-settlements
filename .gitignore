@@ -1,0 +1,39 @@
+# dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# next.js
+.next/
+out/
+build/
+next-env.d.ts
+
+# testing
+coverage/
+
+# env — never commit secrets; .env.example is the committed template
+.env
+.env*.local
+.env.production
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+
+# os / editor
+.DS_Store
+*.pem
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# assignment source material — the brief belongs to the company, not this repo
+orders-and-settlements.pdf
+*.dc.html
+support.js
+
+# working notes — design spec stays local, decisions land in the README instead
+docs/
