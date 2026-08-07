@@ -25,6 +25,9 @@ export function deriveStatus(
   balance: Balance,
   now: Date,
 ): OrderStatus {
+  if (Number.isNaN(order.dueDate.getTime())) {
+    throw new RangeError('deriveStatus received an invalid dueDate.');
+  }
   const paid = netPaid(balance);
   if (paid >= order.totalMinor) return 'paid';
   if (now > endOfDayUtc(order.dueDate)) return 'overdue';

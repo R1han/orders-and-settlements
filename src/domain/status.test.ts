@@ -41,21 +41,19 @@ describe('deriveStatus', () => {
   });
 
   it('treats the due date as inclusive through end of day UTC', () => {
-    expect(deriveStatus(order, ZERO_BALANCE, new Date('2026-01-10T23:59:59Z'))).toBe('pending');
-    expect(deriveStatus(order, ZERO_BALANCE, new Date('2026-01-11T00:00:01Z'))).toBe('overdue');
+    expect(deriveStatus(order, ZERO_BALANCE, new Date('2026-01-10T23:59:59.999Z'))).toBe('pending');
+    expect(deriveStatus(order, ZERO_BALANCE, new Date('2026-01-11T00:00:00.000Z'))).toBe('overdue');
   });
 
   it('treats a zero-total order as paid', () => {
     expect(deriveStatus({ totalMinor: 0, dueDate: DUE }, ZERO_BALANCE, AFTER)).toBe('paid');
   });
 
-  it('treats an invalid due date as not overdue', () => {
-    // Invalid dates have NaN as their time value. Comparisons with NaN are always false,
-    // so now > endOfDayUtc(invalidDate) is false, meaning the order never becomes overdue.
-    const invalidDate = new Date('nonsense');
-    expect(deriveStatus({ totalMinor: 100000, dueDate: invalidDate }, ZERO_BALANCE, AFTER)).toBe('pending');
-    expect(deriveStatus({ totalMinor: 100000, dueDate: invalidDate }, balance(40000), AFTER)).toBe('partially_paid');
-    expect(deriveStatus({ totalMinor: 100000, dueDate: invalidDate }, balance(100000), AFTER)).toBe('paid');
+  it('rejects an invalid due date rather than silently never being overdue', () => {
+    // NaN comparisons are always false, so without this guard the order would sit
+    // outside the overdue bucket indefinitely instead of surfacing the bad data.
+    expect(() => deriveStatus({ totalMinor: 100000, dueDate: new Date('nonsense') }, ZERO_BALANCE, AFTER))
+      .toThrow(RangeError);
   });
 });
 
@@ -66,6 +64,10 @@ describe('dueMinor', () => {
   });
 
   it('clamps at zero rather than reporting a negative amount due', () => {
+    // Unclamped this is -20000. Over-payment is guarded elsewhere, so this state
+    // should not arise — the clamp exists so a corrupt balance renders as 0 due
+    // rather than as a negative amount owed.
+    expect(dueMinor(100000, balance(120000))).toBe(0);
     expect(dueMinor(100000, balance(100000))).toBe(0);
   });
 });
