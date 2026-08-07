@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { ObjectId } from 'mongodb';
-import { useTestDb } from './helpers';
+import { setupTestDb } from './helpers';
 import { ledger, users, isDuplicateKey } from '@/server/db';
 
-useTestDb();
+setupTestDb();
 
 const entry = (orderId: ObjectId, userId: ObjectId, seq: number, idempotencyKey: string | null = null) => ({
   orderId, userId, seq, kind: 'payment' as const, amountMinor: 100,

@@ -73,7 +73,13 @@ function clientPromise(): Promise<MongoClient> {
   if (!globalThis.__mongoClient) {
     const uri = process.env.MONGODB_URI;
     if (!uri) throw new Error('MONGODB_URI is not set.');
-    globalThis.__mongoClient = new MongoClient(uri).connect();
+    // Caching the promise is the point — one pool per container. But caching a
+    // *rejected* promise would wedge the container: every later call returns the
+    // same failure without retrying. Clear it so a transient fault is recoverable.
+    globalThis.__mongoClient = new MongoClient(uri).connect().catch((error) => {
+      globalThis.__mongoClient = undefined;
+      throw error;
+    });
   }
   return globalThis.__mongoClient;
 }
@@ -121,10 +127,24 @@ export function ensureIndexes(): Promise<void> {
     await (await audit()).createIndexes([
       { key: { userId: 1, orderId: 1, at: -1 }, name: 'user_order_at' },
     ]);
-  })();
+    // Same reasoning as clientPromise: a rejected promise cached here would
+    // wedge a warm container until it's recycled. Clear it so the next call retries.
+  })().catch((error) => {
+    globalThis.__mongoIndexes = undefined;
+    throw error;
+  });
   return globalThis.__mongoIndexes;
 }
 
+/**
+ * Matches a duplicate-key error to the index that raised it, by name.
+ *
+ * Task 10 branches on which index collided — a seq collision means retry, an
+ * idempotencyKey collision means return the original entry — so a false match
+ * would double-charge or spin. Matching is by substring against the server's
+ * errmsg, which means **no index name may be a substring of another**. Keep that
+ * true when adding indexes.
+ */
 export function isDuplicateKey(error: unknown, indexName: string): boolean {
   return error instanceof MongoServerError
     && error.code === 11000

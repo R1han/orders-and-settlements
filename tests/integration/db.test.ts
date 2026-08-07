@@ -1,9 +1,9 @@
-import { describe, it, expect } from 'vitest';
-import { ObjectId } from 'mongodb';
-import { useTestDb } from './helpers';
+import { describe, it, expect, vi } from 'vitest';
+import { Collection, ObjectId } from 'mongodb';
+import { setupTestDb } from './helpers';
 import { ledger, users, ensureIndexes, isDuplicateKey, closeDb, getDb } from '@/server/db';
 
-useTestDb();
+setupTestDb();
 
 const entry = (orderId: ObjectId, userId: ObjectId, seq: number, idempotencyKey: string | null = null) => ({
   orderId, userId, seq, kind: 'payment' as const, amountMinor: 100,
@@ -68,6 +68,21 @@ describe('db module', () => {
   // index in a way Mongo considers a conflict, this is what would catch it.
   it('is idempotent: calling ensureIndexes twice does not throw', async () => {
     await expect(ensureIndexes()).resolves.toBeUndefined();
+    await expect(ensureIndexes()).resolves.toBeUndefined();
+  });
+
+  // A cached rejection would wedge a warm serverless container: every later
+  // call would return the same failure without ever retrying (ensureIndexes'
+  // twin bug for the client connection is exercised by the reconnect test below).
+  it('retries after a failed index creation instead of caching the rejection', async () => {
+    // Clear the cache first: ensureIndexes() already resolved in beforeAll, and
+    // `??=` would just hand back that resolved promise without re-running.
+    await closeDb();
+
+    const spy = vi.spyOn(Collection.prototype, 'createIndexes').mockRejectedValueOnce(new Error('injected failure'));
+    await expect(ensureIndexes()).rejects.toThrow('injected failure');
+    spy.mockRestore();
+
     await expect(ensureIndexes()).resolves.toBeUndefined();
   });
 

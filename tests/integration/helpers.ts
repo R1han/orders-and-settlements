@@ -8,7 +8,7 @@ let server: MongoMemoryReplSet;
  * and duplicate-key behaviour under concurrency are exercised against the same
  * topology the app actually meets in production.
  */
-export function useTestDb() {
+export function setupTestDb() {
   beforeAll(async () => {
     server = await MongoMemoryReplSet.create({ replSet: { count: 1, storageEngine: 'wiredTiger' } });
     process.env.MONGODB_URI = server.getUri();
