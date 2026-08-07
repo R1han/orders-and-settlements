@@ -44,5 +44,11 @@ support.js
 
 # working notes — design spec stays local, decisions land in the README instead
 docs/
+
+# framework-generated agent instruction files — Next regenerates these on every
+# `next dev`; they are local tooling configuration, not part of the application
+AGENTS.md
+CLAUDE.md
+
 .env*
 !.env.example
