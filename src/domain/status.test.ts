@@ -48,6 +48,15 @@ describe('deriveStatus', () => {
   it('treats a zero-total order as paid', () => {
     expect(deriveStatus({ totalMinor: 0, dueDate: DUE }, ZERO_BALANCE, AFTER)).toBe('paid');
   });
+
+  it('treats an invalid due date as not overdue', () => {
+    // Invalid dates have NaN as their time value. Comparisons with NaN are always false,
+    // so now > endOfDayUtc(invalidDate) is false, meaning the order never becomes overdue.
+    const invalidDate = new Date('nonsense');
+    expect(deriveStatus({ totalMinor: 100000, dueDate: invalidDate }, ZERO_BALANCE, AFTER)).toBe('pending');
+    expect(deriveStatus({ totalMinor: 100000, dueDate: invalidDate }, balance(40000), AFTER)).toBe('partially_paid');
+    expect(deriveStatus({ totalMinor: 100000, dueDate: invalidDate }, balance(100000), AFTER)).toBe('paid');
+  });
 });
 
 describe('dueMinor', () => {
