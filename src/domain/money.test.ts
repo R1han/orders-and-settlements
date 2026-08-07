@@ -35,6 +35,14 @@ describe('parseMinor', () => {
   it('rejects values beyond safe integer range', () => {
     expect(() => parseMinor('99999999999999999')).toThrow(ValidationError);
   });
+
+  it('rejects thousands separators', () => {
+    expect(() => parseMinor('1,000.00')).toThrow(ValidationError);
+  });
+
+  it('trims surrounding whitespace', () => {
+    expect(parseMinor('  12.34  ')).toBe(1234);
+  });
 });
 
 describe('formatMinor', () => {
@@ -49,5 +57,13 @@ describe('formatMinor', () => {
     for (const s of ['0.00', '0.01', '12.34', '1000.00', '999999.99']) {
       expect(formatMinor(parseMinor(s))).toBe(s);
     }
+  });
+
+  it('formats negative values by magnitude, not by flooring the signed value', () => {
+    // Math.floor(-1234 / 100) is -13, not -12 — the sign must be split off first.
+    // Refund arithmetic produces negative intermediates, so this branch is reachable.
+    expect(formatMinor(-1234)).toBe('-12.34');
+    expect(formatMinor(-100000)).toBe('-1000.00');
+    expect(formatMinor(-1)).toBe('-0.01');
   });
 });
