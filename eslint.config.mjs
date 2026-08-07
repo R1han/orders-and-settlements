@@ -13,6 +13,17 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
   ]),
+  {
+    files: ['src/domain/**/*.ts'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        patterns: [
+          { group: ['mongodb', 'next', 'next/*', 'next-auth', 'next-auth/*', 'node:fs', 'node:fs/*'],
+            message: 'src/domain must stay pure: no I/O, no framework imports.' },
+        ],
+      }],
+    },
+  },
 ]);
 
 export default eslintConfig;
