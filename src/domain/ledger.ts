@@ -25,6 +25,9 @@ export interface ProjectedEntry {
  * The single hint field on a rejection: "how much can I submit right now?".
  * For a payment that is the room left against the total; for a refund it is the
  * money actually received. One question, one answer, both directions.
+ *
+ * Precondition: kind must be validated by validateAndProject; the ternary below
+ * assumes exactly 'payment' or 'refund'.
  */
 export function maxAllowedMinor(order: { totalMinor: Minor }, balance: Balance, kind: LedgerKind): Minor {
   return kind === 'payment'
@@ -38,6 +41,10 @@ export function validateAndProject(
   input: AppendInput,
   now: Date,
 ): ProjectedEntry {
+  if (input.kind !== 'payment' && input.kind !== 'refund') {
+    throw new ValidationError('Settlement kind must be either a payment or a refund.', { field: 'kind' });
+  }
+
   if (!Number.isInteger(input.amountMinor) || input.amountMinor < 1) {
     throw new ValidationError('Amount must be at least 0.01.', { field: 'amount' });
   }

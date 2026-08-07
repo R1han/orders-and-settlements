@@ -89,6 +89,23 @@ describe('validateAndProject — input validation', () => {
     const entry = validateAndProject(order, ZERO_BALANCE, { ...pay(100), note: '  wire  ' }, NOW);
     expect(entry.note).toBe('wire');
   });
+
+  it('rejects an unrecognised settlement kind rather than silently moving nothing', () => {
+    // LedgerKind is erased at runtime and this arrives from a parsed request body.
+    // Without the guard, an unknown kind passes the ceiling check as if it were a
+    // refund, then matches neither balance update — returning success having moved
+    // no money at all.
+    for (const kind of ['bogus', 'PAYMENT', '', 'payments']) {
+      expect(() => validateAndProject(order, balance(50000), { kind: kind as never, amountMinor: 10000, occurredAt: NOW }, NOW),
+        kind).toThrow(ValidationError);
+    }
+  });
+
+  it('rejects a bad kind before validating the amount', () => {
+    // Both are wrong here; the kind error is the more fundamental one to report.
+    expect(() => validateAndProject(order, ZERO_BALANCE, { kind: 'bogus' as never, amountMinor: 0, occurredAt: NOW }, NOW))
+      .toThrow(/kind/i);
+  });
 });
 
 describe('validateAndProject — immutability', () => {
