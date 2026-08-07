@@ -29,6 +29,14 @@ To learn more about Next.js, take a look at the following resources:
 
 You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
 
+## Authentication
+
+Credentials auth via Auth.js (`next-auth@beta`), with passwords hashed by
+`bcryptjs` rather than `argon2`. argon2id is the stronger algorithm, but it
+ships as a native binding, and native bindings are the most common way a
+Next.js app builds locally and fails on Vercel. If this moved past a
+take-home, argon2id would be the production upgrade.
+
 ## Deploy on Vercel
 
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
