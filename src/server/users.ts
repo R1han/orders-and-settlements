@@ -6,7 +6,14 @@ import { isDuplicateKey, users, type UserDoc } from './db';
 
 const Credentials = z.object({
   email: z.string().trim().toLowerCase().email('Enter a valid email address.'),
-  password: z.string().min(8, 'Use at least 8 characters.'),
+  password: z.string()
+    .min(8, 'Use at least 8 characters.')
+    // bcrypt silently discards input past 72 bytes, which would make two distinct
+    // long passwords authenticate the same account. Reject rather than truncate.
+    // Byte length, not character count: multibyte characters exceed 72 bytes well
+    // before they reach 72 characters.
+    .refine((value) => new TextEncoder().encode(value).length <= 72,
+            'Use a password of 72 bytes or fewer.'),
 });
 
 export async function registerUser(email: string, password: string): Promise<ObjectId> {
