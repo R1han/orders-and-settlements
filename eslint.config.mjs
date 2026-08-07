@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Company assignment source material, not project code:
+    "support.js",
+    "*.dc.html",
   ]),
   {
     files: ['src/domain/**/*.ts'],
