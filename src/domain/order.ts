@@ -7,7 +7,10 @@ export function computeTotals(lines: LineItemInput[]): OrderTotals {
   }
 
   const computed: LineItem[] = lines.map((line, index) => {
-    if (!line.description || line.description.trim().length === 0) {
+    if (typeof line !== 'object' || line === null) {
+      throw new ValidationError('Every line item must be an object.', { field: `lines.${index}` });
+    }
+    if (typeof line.description !== 'string' || line.description.trim().length === 0) {
       throw new ValidationError('Every line item needs a description.', { field: `lines.${index}.description` });
     }
     if (!Number.isInteger(line.quantity) || line.quantity < 1) {

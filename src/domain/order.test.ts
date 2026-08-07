@@ -50,4 +50,16 @@ describe('computeTotals', () => {
       { description: 'A', quantity: 1_000_000, unitPriceMinor: 1_000_000_000_000 },
     ])).toThrow(ValidationError);
   });
+
+  it('rejects a null or non-object line rather than crashing', () => {
+    // These reach computeTotals from JSON bodies; a TypeError here would surface
+    // as a 500 with a stack trace instead of a 400 with a field message.
+    expect(() => computeTotals([null as never])).toThrow(ValidationError);
+    expect(() => computeTotals([undefined as never])).toThrow(ValidationError);
+  });
+
+  it('rejects a truthy non-string description', () => {
+    expect(() => computeTotals([{ description: 42 as never, quantity: 1, unitPriceMinor: 100 }])).toThrow(ValidationError);
+    expect(() => computeTotals([{ description: {} as never, quantity: 1, unitPriceMinor: 100 }])).toThrow(ValidationError);
+  });
 });
