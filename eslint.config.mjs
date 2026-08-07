@@ -27,6 +27,15 @@ const eslintConfig = defineConfig([
       }],
     },
   },
+  {
+    // Vitest helpers named useX() (e.g. useTestDb) are not React hooks and are
+    // called at describe-body top level, which the react-hooks plugin
+    // otherwise flags based on the "use" naming convention alone.
+    files: ['tests/**/*.ts'],
+    rules: {
+      'react-hooks/rules-of-hooks': 'off',
+    },
+  },
 ]);
 
 export default eslintConfig;
