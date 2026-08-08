@@ -1,4 +1,6 @@
+import { ObjectId } from 'mongodb';
 import { ValidationError } from '@/domain/errors';
+import { listEntries } from '@/server/ledger';
 import { getOrder, patchOrder, softDeleteOrder } from '@/server/orders';
 import { requireUserId } from '@/server/session';
 import { fail, ok } from '../../_lib/respond';
@@ -8,7 +10,24 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   try {
     const userId = await requireUserId();
     const { id } = await params;
-    return ok(await getOrder(userId, id, new Date()));
+    // getOrder runs first, so an order owned by another user 404s before any ledger read happens.
+    const order = await getOrder(userId, id, new Date());
+    const entries = await listEntries(new ObjectId(order.id));
+    return ok({
+      ...order,
+      entries: entries.map((entry) => ({
+        id: entry._id.toHexString(),
+        seq: entry.seq,
+        kind: entry.kind,
+        amountMinor: entry.amountMinor,
+        occurredAt: entry.occurredAt.toISOString(),
+        recordedAt: entry.recordedAt.toISOString(),
+        note: entry.note,
+        balanceAfter: entry.balanceAfter,
+        statusBefore: entry.statusBefore,
+        statusAfter: entry.statusAfter,
+      })),
+    });
   } catch (error) {
     return fail(error);
   }

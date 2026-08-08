@@ -1,6 +1,6 @@
 import type { ObjectId } from 'mongodb';
 import { ZERO_BALANCE, type Balance } from '@/domain/types';
-import { ledger } from './db';
+import { ledger, type LedgerEntryDoc } from './db';
 
 /**
  * The newest entry carries the balance after itself, so "current balance" is a
@@ -19,4 +19,8 @@ export async function latestSeq(orderId: ObjectId): Promise<number> {
 
 export async function entryCount(orderId: ObjectId): Promise<number> {
   return (await ledger()).countDocuments({ orderId });
+}
+
+export async function listEntries(orderId: ObjectId): Promise<LedgerEntryDoc[]> {
+  return (await ledger()).find({ orderId }).sort({ seq: 1 }).toArray();
 }

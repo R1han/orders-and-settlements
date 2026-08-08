@@ -50,3 +50,9 @@ export class ExcessRefundError extends DomainError {
     super('EXCESS_REFUND', 409, 'Refund exceeds the amount paid on this order.', details);
   }
 }
+
+export class ConcurrencyError extends DomainError {
+  constructor() {
+    super('CONCURRENT_UPDATE', 409, 'This order is being updated by another request. Try again.');
+  }
+}
