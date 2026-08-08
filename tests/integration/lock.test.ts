@@ -146,6 +146,31 @@ describe('empty patch', () => {
       .find({ orderId: new ObjectId(created.id), event: 'order.updated' })
       .toArray();
     expect(auditDocs).toHaveLength(1);
-    expect(auditDocs[0].payload).toEqual({ fields: [] });
+    expect(auditDocs[0].payload).toEqual({ changes: {} });
+  });
+});
+
+describe('audit trail on patch records prior values, not just field names', () => {
+  it('records prior and new values so a raced edit stays recoverable', async () => {
+    const userId = new ObjectId();
+    const created = await createOrder(userId, input, NOW);
+    await patchOrder(userId, created.id, { customer: 'Acme Holdings' }, NOW);
+
+    const { audit } = await import('@/server/db');
+    const record = await (await audit()).findOne({ orderId: new ObjectId(created.id), event: 'order.updated' });
+    expect(record?.payload).toMatchObject({
+      changes: { customer: { from: 'Acme FZ-LLC', to: 'Acme Holdings' } },
+    });
+  });
+
+  it('records no change for a field set to its existing value', async () => {
+    // A no-op write should not read as an edit in the trail.
+    const userId = new ObjectId();
+    const created = await createOrder(userId, input, NOW);
+    await patchOrder(userId, created.id, { customer: 'Acme FZ-LLC' }, NOW);
+
+    const { audit } = await import('@/server/db');
+    const record = await (await audit()).findOne({ orderId: new ObjectId(created.id), event: 'order.updated' });
+    expect(record?.payload.changes).toEqual({});
   });
 });

@@ -148,11 +148,26 @@ export async function patchOrder(
   if (patch.customer !== undefined) update.customer = patch.customer.trim();
   if (patch.dueDate !== undefined) update.dueDate = patch.dueDate;
 
+  // The entry count is read from ledgerEntries and this writes to orders, so a
+  // payment landing in between is a different document and conflicts with nothing.
+  // The race cannot be closed here — MongoDB gives snapshot isolation, and having
+  // ledger appends touch the order to force a conflict would break the append-only
+  // model. So the consequence is made recoverable instead: the audit row carries the
+  // prior values, and no money figure is reachable through this path (totalMinor and
+  // lines are not patchable), so nothing a payment was validated against can move.
+  const changes: Record<string, { from: unknown; to: unknown }> = {};
+  if (patch.customer !== undefined && patch.customer.trim() !== order.customer) {
+    changes.customer = { from: order.customer, to: patch.customer.trim() };
+  }
+  if (patch.dueDate !== undefined && patch.dueDate.getTime() !== order.dueDate.getTime()) {
+    changes.dueDate = { from: order.dueDate.toISOString(), to: patch.dueDate.toISOString() };
+  }
+
   await (await orders()).updateOne({ _id: order._id, userId }, { $set: update });
 
   // Best-effort, deliberately, same as createOrder: the update already committed,
   // so an audit failure here must not turn a successful patch into a reported error.
-  await recordAudit(userId, order._id, 'order.updated', { fields: Object.keys(patch) }).catch((error) => {
+  await recordAudit(userId, order._id, 'order.updated', { changes }).catch((error) => {
     console.error('audit write failed for order.updated', { orderId: order._id.toHexString(), error });
   });
 
