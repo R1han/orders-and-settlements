@@ -44,7 +44,7 @@ export default async function Dashboard({
   const last = Math.min(pageNumber * PAGE_SIZE, result.total);
 
   return (
-    <div className="max-w-[1240px] px-8 pb-10 pt-[26px]">
+    <div className="mx-auto max-w-[1240px] px-8 pb-10 pt-[26px]">
       <div className="mb-5 flex items-start justify-between gap-6">
         <div>
           <h1 className="text-title">Orders</h1>
