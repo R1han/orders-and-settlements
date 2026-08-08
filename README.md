@@ -278,7 +278,7 @@ erDiagram
     users ||--o{ orders : owns
     users ||--o{ ledgerEntries : owns
     users ||--o{ auditLog : owns
-    users ||--|| counters : "keyed by"
+    users ||--o| counters : "keyed by"
     orders ||--o{ ledgerEntries : "settled by"
     orders |o--o{ auditLog : "referenced by"
 
