@@ -7,6 +7,47 @@ Next.js (App Router) and TypeScript on top of MongoDB, no ORM.
 **Live:** https://orders-and-settlements-ivory.vercel.app
 **Demo login:** `demo@example.com` / `demo-password-123` (created by `npm run seed`)
 
+## Architecture
+
+Three layers, dependencies pointing inward only — `app` calls `server`, `server`
+calls `domain`, and nothing calls back out. `src/domain` is pure TypeScript (no
+I/O, no framework; the clock arrives as a parameter, and an ESLint rule enforces
+the purity). `src/server` owns every MongoDB access, the ledger append protocol,
+and the audit log, and makes no decision `domain` hasn't already made. `src/app`
+is route handlers and React screens — parse, authorise, delegate, render.
+
+```mermaid
+flowchart TD
+    Browser(["Browser"])
+
+    subgraph app["src/app — routes & screens"]
+        Screens["React screens\n(server components)"]
+        Routes["Route handlers\nZod parse -> auth -> fail() envelope"]
+    end
+
+    subgraph server["src/server — all I/O"]
+        Services["Services\nMongo access · ledger append · audit log"]
+    end
+
+    subgraph domain["src/domain — pure logic"]
+        Rules["Money · line math · status derivation\noverpayment / excess-refund guards\n(no I/O, clock passed in)"]
+    end
+
+    Mongo[("MongoDB")]
+
+    Browser -->|renders| Screens
+    Browser -->|"fetch (mutations)"| Routes
+    Screens -->|"direct call, no HTTP hop"| Services
+    Routes --> Services
+    Services --> Rules
+    Services --> Mongo
+```
+
+Screens call the service layer directly — `page.tsx` imports from `src/server`
+the same way a route handler does — rather than fetching the app's own REST
+API. The API exists for the browser's own `fetch` calls (forms, CSV export),
+not as an indirection layer between a server component and its data.
+
 ## Running it locally
 
 Prerequisites: Node 20+, and a MongoDB cluster — a free Atlas cluster, a local
@@ -228,18 +269,80 @@ one it would fix. See the comment above the fetch call in
 
 ## Data model and indexing
 
-Four collections. No ORM — the MongoDB driver directly, with document types
-(`OrderDoc`, `LedgerEntryDoc`, `AuditDoc`, `CounterDoc`) in `src/server/db.ts`.
+Five collections. No ORM — the MongoDB driver directly, with document types
+(`UserDoc`, `OrderDoc`, `LedgerEntryDoc`, `AuditDoc`, `CounterDoc`) in
+`src/server/db.ts`, which is also the source of truth for the fields below.
 
-- **`orders`** — one document per order. Line items are embedded, not a separate
-  collection, since they have no independent identity outside their order:
-  never queried, paged, or referenced on their own.
-- **`ledgerEntries`** — append-only; the running balance lives on the newest
-  entry (`balanceAfter`), so "current balance" is one indexed seek, not a sum.
-- **`users`** — email + bcrypt hash.
-- **`counters`** — one document per user, holding the next order-reference
-  number. `$inc` on it is atomic, the same reasoning as the ledger's `seq`.
-- **`auditLog`** — see the next section.
+```mermaid
+erDiagram
+    users ||--o{ orders : owns
+    users ||--o{ ledgerEntries : owns
+    users ||--o{ auditLog : owns
+    users ||--|| counters : "keyed by"
+    orders ||--o{ ledgerEntries : "settled by"
+    orders |o--o{ auditLog : "referenced by"
+
+    users {
+        ObjectId _id PK
+        string email UK
+        string passwordHash
+        Date createdAt
+    }
+    orders {
+        ObjectId _id PK
+        ObjectId userId FK
+        string ref
+        string customer
+        Date dueDate
+        LineItem_array lines "embedded, not a collection"
+        int subtotalMinor
+        int totalMinor
+        Date createdAt
+        Date updatedAt
+        Date deletedAt "nullable"
+    }
+    ledgerEntries {
+        ObjectId _id PK
+        ObjectId orderId FK
+        ObjectId userId FK
+        int seq "unique per orderId, append-only"
+        string kind
+        int amountMinor
+        Date occurredAt
+        Date recordedAt
+        string note "nullable"
+        object balanceAfter
+        string statusBefore
+        string statusAfter
+        string idempotencyKey "nullable, unique per userId"
+    }
+    auditLog {
+        ObjectId _id PK
+        ObjectId userId FK
+        ObjectId orderId FK "nullable"
+        string event
+        Date at
+        object payload
+    }
+    counters {
+        ObjectId _id PK "= userId"
+        int orderSeq
+    }
+```
+
+Three things that don't show up as boxes and arrows: **`lines` is an embedded
+array field on `orders`**, not a collection — it has no independent identity,
+is never queried, paged, or referenced on its own, and is always read with its
+parent order. **There is no `status` field anywhere** — see Status derivation
+above; storing one would need a scheduled job just to stay honest about
+`overdue`. And **`ledgerEntries` is append-only** (`insertOne`, never updated
+or deleted) — its running balance lives on the newest entry (`balanceAfter`),
+so "current balance" is one indexed seek, not a sum, and the unique index on
+`{orderId, seq}` is the concurrency guard the Concurrency section depends on,
+not merely a sort key.
+
+`counters` holds one document per user with the next order-reference number;
+`$inc` on it is atomic, the same reasoning as the ledger's `seq`.
 
 | Index | Collection | Serves |
 |---|---|---|
@@ -305,7 +408,7 @@ and Tailwind configuration are used verbatim in `src/app/globals.css`, and
 screen layout follows it closely enough that no screen invents a control the
 mockup doesn't already use somewhere else (segmented control, card, pill).
 
-Three deliberate departures: **the locked banner's copy** (the mockup describes
+Deliberate departures: **the locked banner's copy** (the mockup describes
 only line items as locked; the actual rule locks the whole order, so the banner
 was reworded to say that, keeping the same icon and placement); **refunds get
 their own secondary action and dialog** (the mockup only covers payments — the
@@ -313,6 +416,27 @@ refund dialog reuses the payment dialog's field layout and inline-error
 convention so it reads as one system); and **two mockup elements are omitted
 outright** — the "Design tokens" handoff screen, not a product screen a user
 would reach, and the "Send reminder" button, which has no backing feature.
+
+**A top header replaces the sidebar**, brand mark on the left and the signed-in
+email plus sign-out on the right. The mockup's persistent 216px nav rail earns
+its keep across a larger app; four screens (dashboard, order detail, new order,
+login) don't need a permanent rail, and the detail/new screens already carry
+their own back link.
+
+**The login page is a left/right split** — a dark brand panel with a product
+screenshot on the left, the form on the right — replacing the mockup's centred
+card, to give the login screen the same sense of product identity the rest of
+the app gets from its header.
+
+**The dashboard uses the mockup's `cards` summary variant and `comfortable`
+row density.** The mockup draws both as alternatives to the inline-strip
+summary and default row height used earlier in the build; this is a variant
+switch within what the mockup already specifies, not a new design.
+
+The subtotal caption on the create-order screen that explained "calculated in
+the browser, the server recalculates on save" was removed — an implementation
+detail the mockup doesn't show and a user doesn't need; the recalculation
+itself is unchanged (see Money representation, above).
 
 Separately, the sign-up form captures a full-name field but never sends it —
 only email and password reach `/api/auth/register`, matching the brief. The
