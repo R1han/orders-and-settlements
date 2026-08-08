@@ -143,9 +143,17 @@ describe('SettlementActions', () => {
     expect(submit.disabled).toBe(false);
   });
 
-  it('shows a message rather than crashing when the response body is not valid JSON', async () => {
+  // A 2xx means the server accepted the request — the settlement may well be
+  // recorded even though this particular response body couldn't be read (a
+  // truncated response, a misbehaving proxy). Every submission mints a fresh
+  // Idempotency-Key, so telling the user "nothing was recorded" here would
+  // invite a retry that is NOT deduplicated server-side and records the
+  // settlement twice. The message must not claim that, and the route must be
+  // refreshed so the user can see the real state instead of retrying blind.
+  it('does not claim nothing was recorded when a 2xx response body is unreadable, and refreshes instead', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
+      status: 200,
       json: () => Promise.reject(new SyntaxError('Unexpected end of JSON input')),
     } as unknown as Response));
     renderActions();
@@ -155,7 +163,30 @@ describe('SettlementActions', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Record payment' })[1]);
 
     const alert = await screen.findByRole('alert');
-    expect(alert.textContent?.length).toBeGreaterThan(0);
+    expect(alert.textContent).not.toMatch(/nothing was recorded/i);
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  // A non-2xx with an unreadable body is the ordinary "the server said no and we
+  // don't know why" case — nothing was recorded, so the message must not claim
+  // otherwise in either direction; it should just surface the status.
+  it('surfaces the status, without claiming anything about recording, when a non-2xx response body is unreadable', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: () => Promise.reject(new SyntaxError('Unexpected end of JSON input')),
+    } as unknown as Response));
+    renderActions();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Record payment' }));
+    fireEvent.change(amountInput(), { target: { value: '100' } });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Record payment' })[1]);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('500');
+    expect(alert.textContent).not.toMatch(/nothing was recorded/i);
+    expect(alert.textContent).not.toMatch(/was recorded\b/i);
+    expect(mockRefresh).not.toHaveBeenCalled();
   });
 
   it('renders neither action when both ceilings are zero, without crashing', () => {

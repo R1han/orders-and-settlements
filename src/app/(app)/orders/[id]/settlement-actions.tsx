@@ -5,6 +5,13 @@ import { useRouter } from 'next/navigation';
 import { Modal } from '@/components/modal';
 import { useToast } from '@/components/toast';
 import { formatMoney } from '@/lib/format';
+import type { OrderView } from '@/server/orders';
+
+/** The shape read out of a payments/refunds response body, success or failure. */
+type SettlementResponseBody = {
+  order?: OrderView;
+  error?: { message?: string; details?: { maxAllowedMinor?: number } };
+};
 
 const INPUT = 'h-[34px] w-full rounded border border-border-strong px-2.5 text-body';
 const LABEL = 'text-xs font-medium text-[#4a5552]';
@@ -43,13 +50,26 @@ export function SettlementActions({ orderId, orderRef, customer, maxPaymentMinor
     const form = new FormData(event.currentTarget);
     const amount = String(form.get('amount') ?? '');
 
+    let response: Response;
     try {
-      const response = await fetch(`/api/orders/${orderId}/${open}`, {
+      response = await fetch(`/api/orders/${orderId}/${open}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          // One key per submission, so a double-click or a retried request
-          // cannot record the same settlement twice.
+          // A fresh key per submission does NOT deduplicate a manual retry — the
+          // busy/disabled guard on the submit button is what stops a double-click
+          // (and a user editing the amount before retrying should record a new
+          // request, not be silently merged with the old one). What this key
+          // protects against is a single logical request being resent at the
+          // transport level — a proxy or client retrying the same in-flight
+          // fetch — where the server sees the same key twice and treats the
+          // resend as a replay rather than a second settlement.
+          // ponytail: a key stable per user *intent* (minted once when the dialog
+          // opens, not once per submit) would also make a manual retry-after-
+          // failure safe. Not done here — it collides with the server's
+          // IDEMPOTENCY_KEY_REUSED guard the moment the user edits the amount and
+          // retries under the same key, which is a worse failure mode than the
+          // one this fixes.
           'Idempotency-Key': crypto.randomUUID(),
         },
         body: JSON.stringify({
@@ -58,32 +78,51 @@ export function SettlementActions({ orderId, orderRef, customer, maxPaymentMinor
           note: String(form.get('note') ?? ''),
         }),
       });
-      const body = await response.json();
-
-      if (!response.ok) {
-        // The server knows the ceiling; show it rather than a generic failure.
-        const max = body.error?.details?.maxAllowedMinor;
-        const hint = typeof max === 'number'
-          ? ` The most you can record against ${orderRef} is ${formatMoney(max)}.`
-          : '';
-        setError(`${body.error?.message ?? 'Could not record that.'}${hint}`);
-        return;
-      }
-
-      const remaining = body.order.dueMinor as number;
-      toast({
-        kind: 'ok',
-        title: `${COPY[open].verb} recorded`,
-        body: `${formatMoney(body.order[open === 'refunds' ? 'refundedMinor' : 'paidMinor'])} total against ${orderRef} · `
-          + (remaining === 0 ? 'order is now paid in full' : `${formatMoney(remaining)} still due`),
-      });
-      close();
-      router.refresh();
     } catch {
-      setError('The request did not reach the server. Nothing was recorded; try again.');
-    } finally {
+      // The request never reached the server, so nothing was recorded and a retry is safe.
+      setError('The request did not reach the server. Nothing was recorded — try again.');
       setBusy(false);
+      return;
     }
+
+    let body: SettlementResponseBody;
+    try {
+      body = await response.json();
+    } catch {
+      // The server responded but the body was unreadable (a truncated response,
+      // say). On a 2xx the settlement may well have been recorded, and every
+      // submission carries a fresh idempotency key, so telling the user "nothing
+      // was recorded" and inviting a retry would risk recording it a second time.
+      // Send them to the refreshed page to find out, instead.
+      setError(response.ok
+        ? 'The server accepted this but its response could not be read. Refresh the page to see whether it was recorded before trying again.'
+        : `The server rejected this (${response.status}) and its response could not be read.`);
+      if (response.ok) router.refresh();
+      setBusy(false);
+      return;
+    }
+
+    if (!response.ok) {
+      // The server knows the ceiling; show it rather than a generic failure.
+      const max = body.error?.details?.maxAllowedMinor;
+      const hint = typeof max === 'number'
+        ? ` The most you can record against ${orderRef} is ${formatMoney(max)}.`
+        : '';
+      setError(`${body.error?.message ?? 'Could not record that.'}${hint}`);
+      setBusy(false);
+      return;
+    }
+
+    const order = body.order!;
+    const remaining = order.dueMinor;
+    toast({
+      kind: 'ok',
+      title: `${COPY[open].verb} recorded`,
+      body: `${formatMoney(order[open === 'refunds' ? 'refundedMinor' : 'paidMinor'])} total against ${orderRef} · `
+        + (remaining === 0 ? 'order is now paid in full' : `${formatMoney(remaining)} still due`),
+    });
+    close();
+    router.refresh();
   }
 
   return (
