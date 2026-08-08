@@ -60,6 +60,16 @@ describe('exportOrders', () => {
     expect(rows).toEqual([]);
   });
 
+  it('filters by status, matching the same derivation the dashboard uses', async () => {
+    const userId = new ObjectId();
+    const overdue = await createOrder(userId, order(new Date('2026-01-01T00:00:00Z')));
+    await createOrder(userId, order(new Date('2026-02-05T00:00:00Z'))); // still pending
+
+    const rows = await exportOrders(userId, { status: 'overdue' }, NOW);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe(overdue.id);
+  });
+
   it('only returns the requesting user\'s orders', async () => {
     const alice = new ObjectId();
     const bob = new ObjectId();

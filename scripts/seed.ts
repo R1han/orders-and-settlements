@@ -57,6 +57,34 @@ async function main() {
   }
 
   console.log(`\nOrder: /orders/${order.id}\n`);
+
+  console.log('Seeding a few more orders so the dashboard shows every status:\n');
+
+  const pending = await createOrder(userId, {
+    customer: 'Harbourline Logistics',
+    dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
+    lines: [{ description: 'Freight forwarding — Q3', quantity: 1, unitPriceMinor: 275_000 }],
+  });
+  step('Pending', `${pending.ref}, ${pending.customer}, status ${pending.status}`);
+
+  const overdue = await createOrder(userId, {
+    customer: 'Novara Interiors',
+    dueDate: new Date(Date.now() - 12 * 24 * 60 * 60 * 1000),
+    lines: [{ description: 'Fit-out materials', quantity: 3, unitPriceMinor: 42_000 }],
+  });
+  step('Overdue', `${overdue.ref}, ${overdue.customer}, status ${overdue.status}`);
+
+  const partial = await createOrder(userId, {
+    customer: 'Setwell Contracting',
+    dueDate: new Date(Date.now() + 10 * 24 * 60 * 60 * 1000),
+    lines: [{ description: 'Site groundworks — phase 1', quantity: 1, unitPriceMinor: 180_000 }],
+  });
+  const partialResult = await appendEntry(userId, partial.id, {
+    kind: 'payment', amountMinor: 60_000, occurredAt: new Date(),
+  }, new Date());
+  step('Partially paid', `${partial.ref}, ${partial.customer}, status ${partialResult.view.status}`);
+
+  console.log();
 }
 
 main()

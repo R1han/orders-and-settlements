@@ -9,9 +9,9 @@ Next.js (App Router) and TypeScript on top of MongoDB, no ORM.
 
 ## Running it locally
 
-Prerequisites: Node 20+, and a MongoDB cluster — either a free Atlas cluster or a
-local replica set (a plain standalone `mongod` also works; nothing here uses
-transactions, which is the whole point of the concurrency section below).
+Prerequisites: Node 20+, and a MongoDB cluster — a free Atlas cluster, a local
+replica set, or a plain standalone `mongod` (nothing here uses transactions —
+see Concurrency below).
 
 ```bash
 cp .env.example .env.local
@@ -31,8 +31,9 @@ Then:
 npm install
 npm run seed   # creates demo@example.com and a handful of orders in various states
 npm run dev    # http://localhost:3000
-npm test       # 212 tests: pure domain logic + integration tests against a real
-               # in-memory MongoDB (mongodb-memory-server), no mocks of the driver
+npm test       # pure domain logic + integration tests against a real in-memory
+               # MongoDB (mongodb-memory-server). One file mocks the driver on
+               # purpose — see the Concurrency section.
 ```
 
 ## API overview
@@ -73,23 +74,23 @@ Errors share one envelope:
 
 ## Money representation
 
-Every amount is an integer count of minor units (cents) — `totalMinor`, `paidMinor`,
-`amountMinor`, and so on carry the suffix everywhere they appear, in both the domain
-types and the wire format, so a value is never ambiguous about its scale by the time
-it reaches a comparison. Conversion happens at exactly two boundaries: `parseMinor`
-turns a decimal string like `"1000.00"` into `100000` when a request arrives, and
-`formatMinor` turns it back into a string for the CSV and initial page render (the UI
-otherwise works with the integer directly).
+Every amount is an integer count of minor units (cents) — `totalMinor`,
+`paidMinor`, `amountMinor` carry the suffix everywhere they appear, in both the
+domain types and the wire format, so a value is never ambiguous about its scale.
+Conversion happens at exactly one boundary each way: `parseMinor` turns a
+decimal string like `"1000.00"` into `100000` when a request arrives, and
+`formatMinor` (via `formatMoney`) turns it back into a display string in the
+UI. The CSV export deliberately skips that step — it's a machine-readable
+file, not a screen, so its `totalMinor`/`paidMinor` columns carry the raw
+integer; `csvCell` in `src/server/dashboard.ts` does no more than `String(value)`.
 
 The reason is `0.1 + 0.2 !== 0.3`: IEEE-754 floats cannot represent most decimal
-fractions exactly, and summing dollar amounts as floats accumulates that error
-silently. It doesn't announce itself on obviously-round numbers — the assignment's
-own sample order (two line items at $500.00, payments of $400.00 then $600.00) looks
-like it would add up cleanly in floating point too, right up until it doesn't on some
-other input, and by then the ledger has already committed a value that is off by a
-fraction of a cent in a comparison that is supposed to be exact (`amountMinor > ceiling`
-in `src/domain/ledger.ts`). Integers under addition and comparison have no such
-failure mode, so the domain layer never touches a float.
+fractions exactly, and summing amounts as floats accumulates that error
+silently — it doesn't announce itself on round numbers, right up until it
+doesn't on some other input, and by then the ledger has committed a value off
+by a fraction of a cent in a comparison meant to be exact
+(`amountMinor > ceiling` in `src/domain/ledger.ts`). Integers under addition
+and comparison have no such failure mode, so the domain layer never touches a float.
 
 ## Status derivation
 
@@ -193,43 +194,36 @@ precisely rather than just asserting "there are tests":
 
 ## Idempotency
 
-Both settlement endpoints accept an `Idempotency-Key` header. A request that
-carries one, seen again, does not insert a second ledger entry — it returns the
-entry from the first successful call, with `replayed: true` in the response.
+Both settlement endpoints accept an `Idempotency-Key` header, enforced by a
+partial unique index (`user_idem_unique` on `{userId, idempotencyKey}`, scoped
+**per user** rather than per order — a key names "this specific request I
+already told you about," not the order it targeted — and partial, so the many
+requests that send no key at all — `idempotencyKey: null` — never collide with
+each other). A request seen twice under the same key inserts no second ledger
+entry; it returns the entry from the first call, with `replayed: true`.
 
-The key is enforced by a partial unique index, `user_idem_unique` on
-`{userId, idempotencyKey}`, scoped **per user**, not per order — a key is a
-property of "this specific request I already told you about," not of the order it
-happened to target. The index is partial (`idempotencyKey: { $type: 'string' }`) so
-the many settlements that don't send a key at all — `idempotencyKey: null` — never
-collide with each other.
+A `seq` collision and a key collision are opposite branches of the same catch
+block in `appendEntry`: a `seq` collision means someone else won a race you
+were both trying to win, so the fix is to retry with fresh data; a key
+collision means this exact request was already handled, so the fix is the
+opposite of a retry — return what was recorded and insert nothing new.
+Conflating them would double-process a legitimate retry, or infinite-loop on a
+key that will never stop colliding.
 
-A `seq` collision and a key collision are handled by opposite branches of the same
-catch block in `appendEntry`, deliberately: a `seq` collision means *someone else
-won a race you were both trying to win*, so the correct response is to retry with
-fresh data. A key collision means *this exact request was already handled*, so the
-correct response is the opposite of a retry — return what was already recorded and
-insert nothing new. Conflating them would either double-process a legitimate retry
-or infinite-loop on a key that will never stop colliding.
+One edge found in review: a key's scope is `{userId, idempotencyKey}` only, not
+order/kind/amount, so a found row isn't automatically a replay of *this*
+request — replaying a key previously used against a *different* order silently
+returned that order's entry instead. `IDEMPOTENCY_KEY_REUSED` closes it: the
+existing row's `orderId`, `kind`, and `amountMinor` are compared against the
+incoming request, and any mismatch is refused with 409 rather than served.
 
-That distinction has a sharp edge, found in review: a key is scoped to
-`{userId, idempotencyKey}` only, not to an order, kind, or amount, so a found row
-is not automatically a replay of *this* request. Replaying a key that was
-previously used against a *different* order returned that other order's entry with
-a 201 and recorded nothing new — silently answering a completely different request
-with someone else's settlement. `IDEMPOTENCY_KEY_REUSED` closes that: the existing
-row's `orderId`, `kind`, and `amountMinor` are compared against the incoming
-request, and any mismatch is refused with 409 rather than served.
-
-The UI mints a fresh key (`crypto.randomUUID()`) on every form submission, not once
-when the dialog opens. That protects a single logical request against being resent
-at the transport level (a proxy or browser retrying an in-flight fetch) — it does
-**not** deduplicate a manual retry after a visible failure, which is intentionally
-left to the submit button's disabled/busy state instead. A key stable per dialog
-open would cover that gap too, but it was deliberately not built that way: it would
-collide with `IDEMPOTENCY_KEY_REUSED` the moment a user edits the amount and
-resubmits under the same key, which is a worse failure mode than the one it would
-fix. See the comment above the fetch call in
+The UI mints a fresh key per form submission, not once per dialog open. That
+covers a request resent at the transport level (a proxy retrying an in-flight
+fetch) but not a manual retry after a visible failure, which is left to the
+submit button's disabled/busy state instead — a key stable per dialog open
+would close that gap too, but would then collide with `IDEMPOTENCY_KEY_REUSED`
+the moment a user edits the amount and resubmits, a worse failure mode than the
+one it would fix. See the comment above the fetch call in
 `src/app/(app)/orders/[id]/settlement-actions.tsx`.
 
 ## Data model and indexing
@@ -238,18 +232,13 @@ Four collections. No ORM — the MongoDB driver directly, with document types
 (`OrderDoc`, `LedgerEntryDoc`, `AuditDoc`, `CounterDoc`) in `src/server/db.ts`.
 
 - **`orders`** — one document per order. Line items are embedded, not a separate
-  collection, because they have no independent identity or lifecycle outside their
-  order: they are never queried, paged, or referenced on their own, and embedding
-  means loading an order is one document read rather than a document plus a join.
-- **`ledgerEntries`** — append-only. A payment or refund is inserted once and never
-  updated or deleted; the running balance lives on the newest entry
-  (`balanceAfter`), so "current balance" is one indexed seek rather than a sum
-  over every entry for the order.
+  collection, since they have no independent identity outside their order:
+  never queried, paged, or referenced on their own.
+- **`ledgerEntries`** — append-only; the running balance lives on the newest
+  entry (`balanceAfter`), so "current balance" is one indexed seek, not a sum.
 - **`users`** — email + bcrypt hash.
-- **`counters`** — one document per user, holding the next order-reference number
-  (`ORD-1001`, `ORD-1002`, ...). `$inc` on a single document is atomic, so two
-  concurrent order creations can never be issued the same reference — the same
-  reasoning as the ledger's `seq`, one level up the stack.
+- **`counters`** — one document per user, holding the next order-reference
+  number. `$inc` on it is atomic, the same reasoning as the ledger's `seq`.
 - **`auditLog`** — see the next section.
 
 | Index | Collection | Serves |
@@ -263,169 +252,136 @@ Four collections. No ORM — the MongoDB driver directly, with document types
 
 ## Editability and deletion
 
-An order can be edited (`customer`, `dueDate`) freely — until the first settlement
-is recorded against it, at which point it freezes entirely, metadata included, not
-just line items. The reason is the same invariant as the concurrency section:
-overpayment is validated against `totalMinor`, so if the total (or, transitively,
-anything an already-accepted payment was checked against) could still move after
-money had been accepted, every prior acceptance would be retroactively invalid.
-Freezing the whole order is the only way to keep "this payment was valid when
-accepted" true forever. This is a deliberate departure from the supplied mockup,
-whose locked-banner copy describes only line items as locked — the mockup's
-wording was written before the whole-order rule was decided, so the banner text
-was reworded rather than left to describe a narrower lock than actually exists.
+An order can be edited (`customer`, `dueDate`) freely — until the first
+settlement is recorded against it, at which point it freezes entirely, metadata
+included, not just line items. The reason is the same invariant as the
+concurrency section: overpayment is validated against `totalMinor`, so if the
+total could still move after money had been accepted, every prior acceptance
+would be retroactively invalid. Freezing the whole order is the only way to
+keep "this payment was valid when accepted" true forever — a deliberate
+departure from the supplied mockup, whose locked-banner copy describes only
+line items as locked; the banner text was reworded to match the actual rule.
 
-Deletion is soft (`deletedAt`), and the reason is not the usual "keep history for
-undo" one. The natural-sounding hard-delete check — *count the ledger entries for
-this order, and if there are none, delete the order* — reads `ledgerEntries` and
-writes `orders`. Those are two different documents, so a payment landing between
-the read and the write conflicts with nothing: the count reads zero, the delete
-proceeds, and the payment that was accepted a moment later points at an order that
-no longer exists. A transaction does not close this, for the identical write-skew
-reason a transaction doesn't fix the payment race — the count-then-delete pair
-would still be reading one document and writing another, and snapshot isolation
-permits exactly this shape of conflict. Soft deletion doesn't close the race
-either; it makes it benign. The worst case becomes an order flagged `deletedAt`
-that still has one payment attached to it — recoverable, and the ledger entry
-itself is untouched — instead of an orphaned payment pointing at nothing.
+Deletion is soft (`deletedAt`), and the reason isn't the usual "keep history for
+undo" one. The natural hard-delete check — count the ledger entries, delete if
+none — reads `ledgerEntries` and writes `orders`, two different documents, so a
+payment landing between the read and the write conflicts with nothing: the
+count reads zero, the delete proceeds, and the payment accepted a moment later
+points at an order that no longer exists. A transaction doesn't close this, the
+same write-skew reason one doesn't fix the payment race. Soft deletion doesn't
+close the race either; it makes it benign — the worst case is an order flagged
+`deletedAt` that still has one payment attached, recoverable.
 
 ## Status filtering and scale
 
-The four status rules are encoded twice: once in TypeScript (`deriveStatus`, used
-by every single-order read) and once as a MongoDB `$switch` (`statusExpression` in
-`src/server/dashboard.ts`, used by the list, the summary bar, and the CSV export).
-That's verbatim duplication of a logic block, which a review checklist would
-normally flag on sight — it's deliberate, and the reason is that the alternative
-isn't simpler, it's wrong. Deriving status in application code only works if
-filtering also happens in application code, and filtering after paging returns the
-wrong page (an `overdue` filter applied to page 2 of unfiltered results is not page
-2 of overdue orders), while filtering before paging means loading every order for
-the user on every request just to throw most of them away — a correctness bug in
-the first case, and a scale ceiling with no headroom in the second, the moment a
-user has enough orders that pagination matters at all. Encoding the same rule in
+The four status rules are encoded twice: once in TypeScript (`deriveStatus`,
+every single-order read) and once as a MongoDB `$switch` (`statusExpression` in
+`src/server/dashboard.ts`, used by the list, summary bar, and CSV export). That's
+verbatim duplication of a logic block, which a review checklist would normally
+flag on sight — deliberate, because the alternative isn't simpler, it's wrong.
+Filtering after paging returns the wrong page (an `overdue` filter on page 2 of
+unfiltered results isn't page 2 of overdue orders); filtering before paging
+means loading every order just to throw most away. Encoding the rule in
 `$switch` lets MongoDB filter and paginate correctly at the same time.
 
-The risk that duplication creates — the two encodings drifting apart silently — is
+The risk duplication creates — the two encodings drifting apart silently — is
 what `tests/integration/dashboard.test.ts` exists to catch: it runs a fixture
-matrix of orders through both `deriveStatus` and a live aggregation against
+matrix through both `deriveStatus` and a live aggregation against
 `statusExpression` and asserts they agree on every row. It was mutation-tested
 against three independent ways the `$switch` could go subtly wrong (branch-order
-swap, `$gt` vs `$gte` on the day comparison, moving the status filter to the wrong
-pipeline stage) and caught all three.
+swap, `$gt` vs `$gte` on the day comparison, status filter in the wrong pipeline
+stage) and caught all three.
 
 The `$lookup` that fetches each order's latest ledger entry is one indexed seek
-per order via `order_seq_unique` — fine for a dashboard page, and fine well past
-what a single user would accumulate by hand. The next step, when it stops being
-fine, is a read-model collection — one document per order carrying its current
-balance and status, written alongside each ledger append — so the dashboard reads
-one collection instead of joining two. Worth building once a user's order count
-reaches the low thousands and the `$lookup` join shows up in profiling; not before,
-because it adds a second write path that has to stay consistent with the ledger,
-which is exactly the kind of extra moving part this project has otherwise avoided.
+per order via `order_seq_unique` — fine for a dashboard page, well past what a
+single user would accumulate by hand. The read-model projection named under
+"What I deliberately did not build" is the next step, once that join shows up
+in profiling rather than in theory.
 
 ## Following the design
 
-The UI is built from the supplied design mockup — its color and spacing tokens and
-Tailwind configuration are used verbatim in `src/app/globals.css`, not
-approximated, and screen layout follows it closely enough that no screen invents a
-control the mockup doesn't already use somewhere else (the segmented control, the
-card, the pill).
+The UI is built from the supplied design mockup — its color and spacing tokens
+and Tailwind configuration are used verbatim in `src/app/globals.css`, and
+screen layout follows it closely enough that no screen invents a control the
+mockup doesn't already use somewhere else (segmented control, card, pill).
 
-Three deliberate departures:
+Three deliberate departures: **the locked banner's copy** (the mockup describes
+only line items as locked; the actual rule locks the whole order, so the banner
+was reworded to say that, keeping the same icon and placement); **refunds get
+their own secondary action and dialog** (the mockup only covers payments — the
+refund dialog reuses the payment dialog's field layout and inline-error
+convention so it reads as one system); and **two mockup elements are omitted
+outright** — the "Design tokens" handoff screen, not a product screen a user
+would reach, and the "Send reminder" button, which has no backing feature.
 
-- **The locked banner's copy.** Covered above — the mockup describes line items as
-  locked; the actual rule locks the whole order, so the banner was reworded to say
-  that, keeping the same icon and placement.
-- **Refunds get their own secondary action and a dedicated dialog.** The mockup
-  only covers recording payments; refunds aren't in it at all. The refund UI reuses
-  the payment dialog's shape (same field layout, same inline-error convention) so
-  it reads as part of the same system rather than a bolted-on addition.
-- **Two mockup elements are omitted outright**: the "Design tokens" screen, which
-  is a handoff artifact for a design system, not a product screen a user would ever
-  reach, and the "Send reminder" button, which has no backing feature — building
-  either would be UI for a capability that doesn't exist.
-
-Separately, the sign-up form captures a full-name field but never sends it to the
-server — only email and password reach `/api/auth/register`, matching the brief,
-which specifies those two fields and nothing else. The field stays in the form
-because the mockup has it and removing it would be a visible design change for no
-functional reason; it simply has no column to land in.
+Separately, the sign-up form captures a full-name field but never sends it —
+only email and password reach `/api/auth/register`, matching the brief. The
+field stays because the mockup has it and removing it would be a visible design
+change for no functional reason; it simply has no column to land in.
 
 ## Assumptions and tradeoffs
 
-**Single currency, and `totalMinor === subtotalMinor`.** There's no per-order
-currency field and no tax or discount line — `computeTotals` documents the latter
-as a placeholder (`totalMinor` is kept as a field distinct from `subtotalMinor`
-specifically so a future tax/discount step has somewhere to write its result
-without changing every call site that reads `totalMinor`), but nothing currently
-populates it differently. Multi-currency is discussed as a non-goal below.
+**Single currency, and `totalMinor === subtotalMinor`.** No per-order currency
+field and no tax/discount line — `computeTotals` keeps `totalMinor` distinct
+from `subtotalMinor` as a placeholder for a future tax/discount step, but
+nothing populates it differently yet. Multi-currency is a non-goal, below.
 
 **`bcryptjs` over argon2(id).** argon2 is the stronger algorithm by current
-guidance, but the reference implementations ship as native bindings, and a native
-binding is the single most common way a Node app builds cleanly on a laptop and
-fails on Vercel's build image. `bcryptjs` is pure JavaScript, slower per hash than
-a native argon2 binding, and for a take-home whose entire user base is one
-reviewer's browser, that tradeoff is the right one — it would be revisited before
-this handled real signup volume.
+guidance, but its reference implementations ship as native bindings — the single
+most common way a Node app builds on a laptop and fails on Vercel's build image.
+`bcryptjs` is pure JavaScript and slower per hash; for a take-home whose entire
+user base is one reviewer's browser, that's the right tradeoff, and one to
+revisit before this handled real signup volume.
 
-**Passwords are bounded at 72 bytes, not characters.** bcrypt silently truncates
-its input at 72 bytes; anything past that is simply not part of what gets hashed.
-Left unbounded, two different long passwords that happen to share the first 72
-bytes would hash identically and authenticate the same account — a real, silent
-security bug, not a hypothetical one. Registration rejects a password whose
-`TextEncoder`-encoded byte length exceeds 72 rather than truncating it, and the
-bound is bytes rather than characters because multibyte characters (accented
-letters, emoji) can exceed 72 bytes well before 72 characters.
+**Passwords are bounded at 72 bytes, not characters.** bcrypt silently
+truncates at 72 bytes, so two long passwords sharing the first 72 would
+otherwise hash identically and authenticate the same account — a real, silent
+bug. Registration rejects a password whose `TextEncoder`-encoded byte length
+exceeds 72; bytes, not characters, because multibyte characters can exceed 72
+bytes well before 72 characters.
 
 **Order references come from a per-user counter, not a UUID or timestamp.**
-`$inc` on a single `counters` document is atomic, so two orders created in the same
-millisecond for the same user still get distinct, sequential, human-readable
-references (`ORD-1001`, `ORD-1002`) — the same one-document-atomic-write pattern
-used everywhere else in this project in place of a transaction.
+`$inc` on a single `counters` document is atomic, so two orders created in the
+same millisecond still get distinct, sequential references (`ORD-1001`,
+`ORD-1002`) — the same atomic-write pattern used everywhere else here.
 
-**Atlas network access is open (`0.0.0.0/0`) rather than IP-restricted**, because
-Vercel's serverless functions egress from a dynamic, unpublished range of
-addresses that an IP allowlist can't pin down in advance. The connection is still
-authenticated (a scoped `readWrite` user, not the cluster admin) and encrypted in
-transit; this is a stated tradeoff, not an oversight. The production-correct answer
-is an Atlas Private Endpoint (or VPC peering, on platforms that support it) so the
-database is simply unreachable from the public internet regardless of credentials
-— named here rather than left for a reviewer to wonder whether it was considered.
+**Atlas network access is open (`0.0.0.0/0`) rather than IP-restricted**,
+because Vercel's functions egress from a dynamic range an allowlist can't pin
+down. Still authenticated (a scoped `readWrite` user) and encrypted in
+transit; the production-correct answer is an Atlas Private Endpoint or VPC
+peering, named rather than left for a reviewer to wonder about.
 
 ## What I deliberately did not build
 
-**Read-model projections.** The dashboard currently joins `orders` to each order's
-latest `ledgerEntries` row per request. That's the right amount of engineering for
-the data volume a take-home reviewer will ever generate, and adding a
-denormalized, ledger-synced projection collection now would be complexity with no
-one to benefit from it. The trigger to build one is concrete and stated above: a
-user's order count reaching the low thousands, where the join shows up in
-profiling rather than in theory.
+**Read-model projections.** The dashboard joins `orders` to each order's latest
+`ledgerEntries` row per request — the right amount of engineering for the data
+volume a take-home reviewer will generate. **Trigger:** order counts reaching
+the low thousands, where the join shows up in profiling, not in theory.
 
-**Multi-currency.** Every amount is an integer in one implicit currency with no
-currency field anywhere in the schema. Supporting more than one currency isn't a
-formatting change — it changes what "the order total" means (you can't sum a USD
-line and an AED line into one `totalMinor`), which changes the ceiling comparison
-at the center of the concurrency section. The trigger is a real second currency
-being needed for a real customer, not before, because the change touches the
-domain layer's core invariant, not just the UI.
+**Multi-currency.** Every amount is an integer in one implicit currency, with
+no currency field anywhere. Supporting more isn't a formatting change — it
+changes what "the order total" means, which changes the ceiling comparison at
+the center of the concurrency section. **Trigger:** a real second currency
+needed for a real customer, because the change touches the domain layer's
+core invariant, not just the UI.
 
-**A void/reissue flow.** Refunds handle "money should come back"; nothing handles
-"this order should never have existed" as a distinct action — today that's a
-soft-delete on an order with no settlements, or a refund down to zero on one that
-has them. A dedicated void state (as opposed to zero balance) would matter once
-reporting needs to distinguish "this customer paid and was refunded in full" from
-"this order was a mistake and never should have been billed" — those tell different
-stories in a financial report even though they can end at the same balance, and
-that's the trigger for building it.
+**A void/reissue flow.** Refunds handle "money should come back"; nothing
+handles "this order should never have existed" as a distinct action — today
+that's a soft-delete or a refund to zero. **Trigger:** reporting needing to
+distinguish "paid and refunded in full" from "a mistake that never should
+have been billed" — those tell different stories even at the same balance.
 
-**Rate limiting on auth.** `POST /api/auth/register` and the credentials sign-in
-route have no throttling beyond bcrypt's own cost factor slowing down brute-force
-attempts. That's an acceptable gap for a take-home behind a URL nobody is
-scanning; it stops being acceptable the moment this sits at a public,
-discoverable URL with real accounts behind it, which is the trigger — at that
-point it's a per-IP-and-per-account limiter in front of both routes, not a
-change to either route itself.
+**Rate limiting on auth.** Registration and sign-in have no throttling beyond
+bcrypt's own cost factor. Acceptable for a take-home behind a URL nobody is
+scanning. **Trigger:** a public, discoverable URL with real accounts behind
+it — a per-IP-and-per-account limiter in front of both routes.
+
+**HTTP-level tests for the route handlers.** Every handler under `src/app/api`
+is thin — authorise, parse, delegate to a `src/server/*` function, translate
+through `ok()`/`fail()` — and is covered at the schema and service layers,
+against a real in-memory MongoDB, rather than again over an actual HTTP
+request. **Trigger:** a handler ever growing logic beyond that shape; until
+then, route-level tests would just re-test the layer below.
 
 ## What I'd improve before production
 
@@ -433,45 +389,29 @@ Every shortcut below is deliberate and grep-able (`grep -rn "ponytail:" src/
 scripts/`); each is a documented ceiling, not a silent gap.
 
 - **`src/server/settlements.ts`** — the retry loop in `appendEntry` uses a fixed
-  bound (`MAX_ATTEMPTS = 5`) with no backoff between attempts. That's fine because
-  contention here is realistically two browser tabs open on the same order, not a
-  thundering herd. **Trigger:** this ever fronts something with real concurrent
-  load, like a payment processor's webhook retries. **Upgrade:** add jitter or
-  exponential backoff between attempts so a genuine burst spreads out instead of
-  hammering the same index in lockstep.
-- **`src/server/orders.ts`** — the audit row written alongside `order.created` is
-  best-effort: if it fails, the order creation still succeeds and the failure is
-  only logged, not surfaced or retried. **Trigger:** audit completeness becomes a
-  hard compliance requirement rather than a debugging aid. **Upgrade:** an outbox
-  row written in the same insert as the order, drained by a separate worker — not
-  a transaction, which wouldn't survive the append-only ledger model this project
-  is built around.
+  bound (`MAX_ATTEMPTS = 5`) with no backoff, fine because contention here is two
+  browser tabs, not a thundering herd. **Trigger:** real concurrent load, like a
+  payment processor's webhook retries. **Upgrade:** jitter or exponential backoff.
+- **`src/server/orders.ts`** — the audit row alongside `order.created` is
+  best-effort: a failure is logged, not surfaced or retried. **Trigger:** audit
+  completeness becomes a hard compliance requirement. **Upgrade:** an outbox row
+  written in the same insert, drained by a separate worker — not a transaction,
+  which wouldn't survive the append-only ledger model.
 - **`src/server/dashboard.ts`** (latest-balance lookup) — one indexed `$lookup`
-  seek per order on every dashboard page load, discussed above under "Status
-  filtering and scale." **Trigger:** a user's order count reaches the low
-  thousands and the join is visible in profiling. **Upgrade:** the read-model
-  projection collection named in that section.
-- **`src/server/dashboard.ts`** (`exportOrders`) — the CSV export loads every
-  matching row into memory before writing the response; there's no pagination or
-  streaming. **Trigger:** an export large enough that buffering it becomes a real
-  memory concern — thousands of orders, not the dozens a take-home reviewer will
-  generate. **Upgrade:** stream the aggregation cursor directly into the response
-  body instead of materializing an array first.
+  seek per order per dashboard load, discussed under "Status filtering and
+  scale." **Trigger/upgrade:** the same read-model projection named there.
+- **`src/server/dashboard.ts`** (`exportOrders`) — the CSV export buffers every
+  matching row in memory; no pagination or streaming. **Trigger:** an export
+  large enough to make that a real memory concern. **Upgrade:** stream the
+  aggregation cursor into the response instead of materializing an array first.
 - **`src/app/(app)/orders/[id]/settlement-actions.tsx`** — the idempotency key is
-  minted fresh per form submission, not once per dialog open, so it protects
-  against a resent request at the transport level but not against a user manually
-  retrying after a visible failure. Covered in full under "Idempotency" above.
-  **Trigger:** none identified that doesn't also make the failure mode worse —
-  this one is closer to "correctly decided against" than "deferred," and is
-  recorded here for completeness rather than as a plan to change it.
+  minted fresh per form submission, not per dialog open. Covered in full under
+  "Idempotency" above; recorded here for completeness — it's closer to
+  "correctly decided against" than "deferred," so there's no upgrade trigger.
 
-A few smaller, individually-verified-safe items surfaced during review are worth
-naming rather than hiding: the CSV export's formula-injection guard (a leading
-apostrophe before `=`, `+`, `-`, `@`) is the standard mitigation and is lossy for a
-customer genuinely named `-Acme` if the file is later read by something other than
-a spreadsheet application — a bare `-Acme` and an escaped `'-Acme` are not the same
-string. Re-running `npm run seed` clears `orders` and `counters` but leaves
-`ledgerEntries` and `auditLog` behind, so repeated local seeding accumulates
-orphaned rows — harmless (still scoped to the demo user and unreachable once the
-parent order is gone) but not tidy. Both are accepted trade-offs of tools built
-for this project's actual scale, not defects hiding as trade-offs.
+Two smaller, verified-safe items worth naming rather than hiding: the CSV
+export's formula-injection guard (a leading apostrophe before `=+-@`) is lossy
+for a customer genuinely named `-Acme` outside a spreadsheet reader. And
+re-running `npm run seed` clears `orders`/`counters` but leaves
+`ledgerEntries`/`auditLog` behind — harmless, not tidy. Accepted trade-offs of
+tools built for this project's actual scale, not defects in disguise.

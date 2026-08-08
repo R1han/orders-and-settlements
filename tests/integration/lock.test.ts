@@ -131,7 +131,7 @@ describe('patchOrder ignores fields it does not own', () => {
 });
 
 describe('empty patch', () => {
-  it('is a no-op on the data but still bumps updatedAt and records an audit event', async () => {
+  it('is a no-op on the data, still bumps updatedAt, and writes no audit row', async () => {
     const userId = new ObjectId();
     const created = await createOrder(userId, input, NOW);
     const patched = await patchOrder(userId, created.id, {}, NOW);
@@ -145,8 +145,7 @@ describe('empty patch', () => {
     const auditDocs = await (await audit())
       .find({ orderId: new ObjectId(created.id), event: 'order.updated' })
       .toArray();
-    expect(auditDocs).toHaveLength(1);
-    expect(auditDocs[0].payload).toEqual({ changes: {} });
+    expect(auditDocs).toHaveLength(0);
   });
 });
 
@@ -163,7 +162,7 @@ describe('audit trail on patch records prior values, not just field names', () =
     });
   });
 
-  it('records no change for a field set to its existing value', async () => {
+  it('writes no audit row for a field set to its existing value', async () => {
     // A no-op write should not read as an edit in the trail.
     const userId = new ObjectId();
     const created = await createOrder(userId, input, NOW);
@@ -171,6 +170,6 @@ describe('audit trail on patch records prior values, not just field names', () =
 
     const { audit } = await import('@/server/db');
     const record = await (await audit()).findOne({ orderId: new ObjectId(created.id), event: 'order.updated' });
-    expect(record?.payload.changes).toEqual({});
+    expect(record).toBeNull();
   });
 });

@@ -104,6 +104,14 @@ export async function counters(): Promise<Collection<CounterDoc>> {
   return (await getDb()).collection<CounterDoc>('counters');
 }
 
+/**
+ * Called from write paths (order creation, settlements) and from the
+ * dashboard's first-render read — deliberately not from every read
+ * (`/api/orders/[id]`, `/audit`, `/export` don't call it). One call per warm
+ * process is enough since the promise is cached on `globalThis`, and the
+ * dashboard is the route a session all but always hits first, so this is a
+ * stated rule about where the call lives, not a gap in the other three routes.
+ */
 export function ensureIndexes(): Promise<void> {
   globalThis.__mongoIndexes ??= (async () => {
     await (await users()).createIndexes([

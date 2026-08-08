@@ -12,11 +12,6 @@ export async function latestBalance(orderId: ObjectId): Promise<Balance> {
   return entry?.balanceAfter ?? ZERO_BALANCE;
 }
 
-export async function latestSeq(orderId: ObjectId): Promise<number> {
-  const entry = await (await ledger()).findOne({ orderId }, { sort: { seq: -1 }, projection: { seq: 1 } });
-  return entry?.seq ?? 0;
-}
-
 export async function entryCount(orderId: ObjectId): Promise<number> {
   return (await ledger()).countDocuments({ orderId });
 }

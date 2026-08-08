@@ -183,7 +183,18 @@ export default async function OrderDetail({ params }: { params: Promise<{ id: st
                 className={`flex items-baseline gap-3 px-4 py-2.5 text-[12.5px] ${
                   index === 0 ? '' : 'border-t border-[#eef0ef]'}`}>
               <span className="w-[110px] flex-none text-fg-subtle">{formatDate(item.at)}</span>
-              <span className="min-w-0 flex-1 text-[#3d4a47]">{item.summary}</span>
+              <span className="min-w-0 flex-1 text-[#3d4a47]">
+                {item.summary}
+                {item.amountMinor !== null && <> {formatMoney(item.amountMinor)}</>}
+                {item.statusBefore && item.statusAfter && (
+                  <span className="ml-2 text-[11.5px] font-normal text-fg-subtle">
+                    {item.statusBefore} → {item.statusAfter}
+                  </span>
+                )}
+                {item.errorCode && (
+                  <span className="ml-2 text-[11.5px] font-normal text-fg-subtle">({item.errorCode})</span>
+                )}
+              </span>
               <code className="flex-none font-mono text-[11px] text-fg-subtle">{item.kind}</code>
             </li>
           ))}

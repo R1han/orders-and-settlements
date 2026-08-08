@@ -1,7 +1,10 @@
 import { ValidationError } from '@/domain/errors';
 import { exportOrders, toCsv } from '@/server/dashboard';
 import { requireUserId } from '@/server/session';
+import type { OrderStatus } from '@/domain/types';
 import { fail } from '../../_lib/respond';
+
+const STATUSES: OrderStatus[] = ['pending', 'partially_paid', 'paid', 'overdue'];
 
 /**
  * An unparsable date string does not throw when passed to `new Date(...)` —
@@ -25,7 +28,10 @@ export async function GET(request: Request) {
     const userId = await requireUserId();
     const url = new URL(request.url);
 
+    const status = url.searchParams.get('status');
+
     const rows = await exportOrders(userId, {
+      status: STATUSES.includes(status as OrderStatus) ? (status as OrderStatus) : undefined,
       from: parseDateParam(url.searchParams.get('from'), 'from'),
       to: parseDateParam(url.searchParams.get('to'), 'to'),
     }, new Date());

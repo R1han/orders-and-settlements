@@ -167,9 +167,14 @@ export async function patchOrder(
 
   // Best-effort, deliberately, same as createOrder: the update already committed,
   // so an audit failure here must not turn a successful patch into a reported error.
-  await recordAudit(userId, order._id, 'order.updated', { changes }).catch((error) => {
-    console.error('audit write failed for order.updated', { orderId: order._id.toHexString(), error });
-  });
+  // Skipped entirely when nothing actually changed — a PATCH with no fields, or one
+  // whose values match what's already stored, is not an edit and should not read as
+  // one in the trail.
+  if (Object.keys(changes).length > 0) {
+    await recordAudit(userId, order._id, 'order.updated', { changes }).catch((error) => {
+      console.error('audit write failed for order.updated', { orderId: order._id.toHexString(), error });
+    });
+  }
 
   return toView({ ...order, ...update } as OrderDoc, await latestBalance(order._id), now);
 }

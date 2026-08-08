@@ -15,10 +15,20 @@ export async function recordAudit(
   await (await audit()).insertOne({ _id: new ObjectId(), userId, orderId, event, at: new Date(), payload });
 }
 
+/**
+ * Money and status stay structured fields, not baked into `summary`, so this
+ * module never has to know how a minor-units figure should be displayed —
+ * that's the UI's job (`formatMoney`). `summary` carries only what has no
+ * numeric formatting decision attached to it.
+ */
 export interface TimelineItem {
   at: string;
   kind: string;
   summary: string;
+  amountMinor: number | null;
+  statusBefore: string | null;
+  statusAfter: string | null;
+  errorCode: string | null;
 }
 
 /**
@@ -42,16 +52,24 @@ export async function orderTimeline(userId: ObjectId, orderId: ObjectId): Promis
     ...entries.map((entry) => ({
       at: entry.recordedAt.toISOString(),
       kind: entry.kind,
-      summary: `${entry.kind === 'refund' ? 'Refund' : 'Payment'} of ${entry.amountMinor} minor units`
-        + ` — ${entry.statusBefore} → ${entry.statusAfter}`,
+      summary: entry.kind === 'refund' ? 'Refund' : 'Payment',
+      amountMinor: entry.amountMinor,
+      statusBefore: entry.statusBefore,
+      statusAfter: entry.statusAfter,
+      errorCode: null,
     })),
-    ...records.map((record) => ({
-      at: record.at.toISOString(),
-      kind: record.event,
-      summary: record.event === 'payment.rejected' || record.event === 'refund.rejected'
-        ? `Rejected ${record.payload.amountMinor} minor units (${record.payload.code})`
-        : record.event.replace('order.', 'Order '),
-    })),
+    ...records.map((record) => {
+      const rejected = record.event === 'payment.rejected' || record.event === 'refund.rejected';
+      return {
+        at: record.at.toISOString(),
+        kind: record.event,
+        summary: rejected ? 'Rejected' : record.event.replace('order.', 'Order '),
+        amountMinor: rejected ? Number(record.payload.amountMinor) : null,
+        statusBefore: null,
+        statusAfter: null,
+        errorCode: rejected ? String(record.payload.code) : null,
+      };
+    }),
   ];
 
   return items.sort((a, b) => a.at.localeCompare(b.at));

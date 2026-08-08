@@ -89,7 +89,7 @@ export default async function Dashboard({
             </Link>
           ))}
         </div>
-        <a href="/api/orders/export" download
+        <a href={`/api/orders/export${status ? `?status=${status}` : ''}`} download
            className="flex h-7 items-center gap-1.5 rounded border border-border-strong bg-surface px-2.5 text-[12.5px]">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
             <path d="M12 3v12M7 11l5 5 5-5M4 20h16" />

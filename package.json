@@ -2,6 +2,9 @@
   "name": "orders-and-settlements",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=20.6"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
