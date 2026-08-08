@@ -244,9 +244,6 @@ export function OrderForm() {
         <div className="flex items-baseline justify-end gap-3.5 border-t border-border px-4 py-3">
           <div className="text-right">
             <div className="text-[12.5px] text-fg-muted">Subtotal</div>
-            <div className="mt-px text-[11px] text-[#9aa3a0]">
-              Calculated in the browser. The server recalculates on save.
-            </div>
           </div>
           <div className="min-w-[150px] text-right text-lg font-semibold tabular-nums">
             {formatMoney(previewMinor(lines))}
