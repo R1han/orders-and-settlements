@@ -64,23 +64,23 @@ export default async function Dashboard({
       </div>
 
       {summary.totalCount > 0 && (
-        <div className="flex items-center gap-[22px] overflow-x-auto whitespace-nowrap rounded-t-lg border border-b-0 border-border bg-surface px-3.5 py-[9px] text-[12.5px]">
-          <span className="text-fg-muted">
-            Outstanding <b className="ml-1.5 font-semibold tabular-nums text-fg">{formatMoney(summary.outstandingMinor)}</b>
-          </span>
-          <span className="h-[13px] w-px bg-border" />
-          <span className="text-fg-muted">
-            Overdue <b className="ml-1.5 font-semibold tabular-nums text-status-overdue-fg">{formatMoney(summary.overdueMinor)}</b>
-          </span>
-          <span className="h-[13px] w-px bg-border" />
-          <span className="text-fg-muted">
-            Open orders <b className="ml-1.5 font-semibold tabular-nums text-fg">{summary.openCount}</b>
-          </span>
+        <div className="mb-[18px] grid grid-cols-3 gap-3">
+          <div className="rounded-lg border border-border bg-surface px-[15px] py-[13px]">
+            <div className="text-label uppercase text-fg-subtle">Total outstanding</div>
+            <div className="mt-[5px] text-metric tabular-nums text-fg">{formatMoney(summary.outstandingMinor)}</div>
+          </div>
+          <div className="rounded-lg border border-border bg-surface px-[15px] py-[13px]">
+            <div className="text-label uppercase text-fg-subtle">Overdue</div>
+            <div className="mt-[5px] text-metric tabular-nums text-status-overdue-fg">{formatMoney(summary.overdueMinor)}</div>
+          </div>
+          <div className="rounded-lg border border-border bg-surface px-[15px] py-[13px]">
+            <div className="text-label uppercase text-fg-subtle">Open orders</div>
+            <div className="mt-[5px] text-metric tabular-nums text-fg">{summary.openCount}</div>
+          </div>
         </div>
       )}
 
-      <div className={`flex items-center gap-3 border border-border bg-surface px-3 py-[9px] ${
-        summary.totalCount > 0 ? 'border-t-[#eef0ef]' : 'rounded-t-lg'}`}>
+      <div className="flex items-center gap-3 overflow-x-auto rounded-t-lg border border-border bg-surface px-3 py-[9px]">
         <div className="flex gap-0.5 rounded bg-[#f2f4f3] p-0.5">
           {FILTERS.map((filter) => (
             <Link key={filter.label} href={filter.value ? `/?status=${filter.value}` : '/'}

@@ -26,7 +26,7 @@ export function OrdersTable({ orders, now }: { orders: OrderView[]; now: Date })
           {orders.map((order) => {
             const caption = relativeDue(order.dueDate, order.status, now);
             return (
-              <tr key={order.id} className="h-row hover:bg-[#fafbfa]">
+              <tr key={order.id} className="h-row-lg hover:bg-[#fafbfa]">
                 <td className={`${TD} font-mono text-xs text-fg-subtle`}>
                   <Link href={`/orders/${order.id}`}>{order.ref}</Link>
                 </td>
