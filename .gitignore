@@ -52,3 +52,6 @@ CLAUDE.md
 
 .env*
 !.env.example
+
+# local tooling output
+.playwright-mcp/
