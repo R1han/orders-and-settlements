@@ -75,6 +75,27 @@ describe('listOrders', () => {
     expect((await listOrders(alice, { page: 1, pageSize: 20 }, NOW)).total).toBe(0);
     expect((await listOrders(bob, { page: 1, pageSize: 20 }, NOW)).total).toBe(1);
   });
+
+  it('degrades safely on an out-of-range page rather than erroring', async () => {
+    // Number() parses these, and an unclamped value reaches $skip, which cannot
+    // represent them as a 64-bit integer and fails the whole query.
+    const userId = new ObjectId();
+    await createOrder(userId, order(FUTURE), NOW);
+
+    for (const page of [Infinity, 1e21, Number.NaN, -5, 0]) {
+      const result = await listOrders(userId, { page, pageSize: 20 }, NOW);
+      expect(result.total, String(page)).toBe(1);
+    }
+  });
+
+  it('returns an empty page past the end without losing the total', async () => {
+    const userId = new ObjectId();
+    await createOrder(userId, order(FUTURE), NOW);
+
+    const result = await listOrders(userId, { page: 500, pageSize: 20 }, NOW);
+    expect(result.orders).toEqual([]);
+    expect(result.total).toBe(1);
+  });
 });
 
 describe('pipeline and domain agree', () => {

@@ -96,9 +96,19 @@ function derivationStages(
   ];
 }
 
+const MAX_PAGE = 10_000;
+
 export async function listOrders(userId: ObjectId, params: ListParams, now: Date): Promise<ListResult> {
-  const page = Math.max(1, Math.trunc(params.page) || 1);
-  const pageSize = Math.min(100, Math.max(1, Math.trunc(params.pageSize) || 20));
+  // Number() parses "Infinity" and "1e21", and an unclamped value reaches $skip,
+  // which rejects anything it cannot hold in 64 bits — surfacing as a 500 rather
+  // than an empty page. Clamp both ends and reject non-finite input explicitly
+  // rather than relying on Math.min/Math.max happening to absorb it.
+  const requestedPage = Math.trunc(params.page);
+  const page = Number.isFinite(requestedPage) ? Math.min(MAX_PAGE, Math.max(1, requestedPage || 1)) : 1;
+  const requestedPageSize = Math.trunc(params.pageSize);
+  const pageSize = Number.isFinite(requestedPageSize)
+    ? Math.min(100, Math.max(1, requestedPageSize || 20))
+    : 20;
 
   const [result] = await (await orders())
     .aggregate<{ rows: Row[]; count: { value: number }[] }>([
