@@ -22,7 +22,11 @@ function previewMinor(lines: Line[]): number {
   return lines.reduce((total, line) => {
     const quantity = Number(line.quantity);
     const match = /^(\d+)(?:\.(\d{1,2}))?$/.exec(line.unitPrice.trim());
-    if (!match || !Number.isFinite(quantity)) return total;
+    // Integer, not just finite: a decimal quantity (e.g. "1.5") is finite but invalid —
+    // it would multiply into a fractional minor-unit total that formatMoney was never
+    // built to display, and it will be rejected at submit anyway. Drop it to 0 rather
+    // than show a garbled preview for a value the server will never accept.
+    if (!match || !Number.isInteger(quantity)) return total;
     const unit = Number(match[1]) * 100 + Number((match[2] ?? '').padEnd(2, '0'));
     return total + quantity * unit;
   }, 0);
@@ -100,10 +104,14 @@ export function OrderForm() {
     if (!dueDate) next.dueDate = 'Due date is required.';
     lines.forEach((line, index) => {
       if (!line.description.trim()) next[lineErrorKey(index, 'description')] = 'Description is required.';
-      const quantity = Number(line.quantity);
-      if (!Number.isInteger(quantity)) {
+      // Whole digits only — the field itself no longer rewrites what was typed (a "1.5"
+      // must still read "1.5"), so this is the only place a decimal quantity is caught.
+      // Same wording the server uses, so the two can never disagree.
+      const raw = line.quantity.trim();
+      const isWholeNumber = /^\d+$/.test(raw);
+      if (raw !== '' && !isWholeNumber) {
         next[lineErrorKey(index, 'quantity')] = 'Quantity must be a whole number.';
-      } else if (quantity < 1) {
+      } else if (!isWholeNumber || Number(raw) < 1) {
         next[lineErrorKey(index, 'quantity')] = 'Quantity must be at least 1.';
       }
     });
@@ -202,7 +210,7 @@ export function OrderForm() {
                        placeholder="What are you billing for?"
                        className={`${INPUT} ${descErr ? ERROR_INPUT : ''}`} />
                 <input value={line.quantity}
-                       onChange={(e) => update(index, { quantity: e.target.value.replace(/\D/g, '') }, lineErrorKey(index, 'quantity'))}
+                       onChange={(e) => update(index, { quantity: e.target.value }, lineErrorKey(index, 'quantity'))}
                        inputMode="numeric" className={`${INPUT} text-right tabular-nums ${qtyErr ? ERROR_INPUT : ''}`} />
                 <input value={line.unitPrice}
                        onChange={(e) => update(index, { unitPrice: e.target.value }, lineErrorKey(index, 'unitPrice'))}

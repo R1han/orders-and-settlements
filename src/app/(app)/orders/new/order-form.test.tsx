@@ -130,10 +130,57 @@ describe('OrderForm', () => {
       .not.toMatch(/border-status-overdue-dot/);
   });
 
-  it('strips non-digit characters from the quantity input so it can never carry a non-integer', () => {
+  // The round-1 defect: an earlier version stripped non-digit characters from the
+  // quantity field on every keystroke, so a typed "1.5" silently became "15" — a
+  // tenfold quantity on an order document, with no error and no visible cue beyond
+  // the missing decimal point. The field must keep exactly what was typed and reject
+  // it at submit instead, with the server's own wording.
+  it('rejects a decimal quantity instead of silently changing its value', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
     renderForm();
-    fireEvent.change(quantityInputs()[0], { target: { value: '2.5' } });
-    expect((quantityInputs()[0] as HTMLInputElement).value).toBe('25');
+
+    fireEvent.change(screen.getByPlaceholderText('Company name'), { target: { value: 'Acme Co' } });
+    fireEvent.change(descriptionInput(), { target: { value: 'Consulting' } });
+    fireEvent.change(quantityInputs()[0], { target: { value: '1.5' } });
+    fireEvent.change(priceInput(), { target: { value: '500.00' } });
+    fireEvent.change(document.querySelector('input[type="date"]')!, { target: { value: '2026-09-01' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create order' }));
+
+    const message = await screen.findByText('Quantity must be a whole number.');
+    expect(message.closest('[role="alert"]')).toBeTruthy();
+    // Never rewritten — a stripped "15" would be indistinguishable from a real 15.
+    expect((quantityInputs()[0] as HTMLInputElement).value).toBe('1.5');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('leaves the preview at zero for an unparseable quantity rather than NaN', () => {
+    renderForm();
+    fireEvent.change(quantityInputs()[0], { target: { value: '1.5' } });
+    fireEvent.change(priceInput(), { target: { value: '500.00' } });
+
+    expect(screen.queryByText(/NaN/)).toBeNull();
+    // Per-line amount and subtotal both read zero: a decimal quantity contributes
+    // nothing to the preview rather than a fractional or garbled minor-unit total.
+    expect(screen.getAllByText('AED 0.00')).toHaveLength(2);
+  });
+
+  it('does not validate the quantity field until submit, so ordinary typing never errors mid-keystroke', () => {
+    renderForm();
+    const quantity = quantityInputs()[0] as HTMLInputElement;
+
+    fireEvent.change(quantity, { target: { value: '1' } });
+    fireEvent.change(quantity, { target: { value: '12' } });
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    fireEvent.change(quantity, { target: { value: '' } });
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(quantity.value).toBe('');
+
+    fireEvent.change(quantity, { target: { value: '5' } });
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(quantity.value).toBe('5');
   });
 
   it('on success, toasts the created order and navigates to its detail page', async () => {
