@@ -1,4 +1,5 @@
 import { ValidationError } from '@/domain/errors';
+import { ensureIndexes } from '@/server/db';
 import { appendEntry } from '@/server/settlements';
 import { requireUserId } from '@/server/session';
 import { fail, ok } from '../../../_lib/respond';
@@ -6,6 +7,7 @@ import { AmountSchema, fieldErrors } from '../../../_lib/schemas';
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
+    await ensureIndexes();
     const userId = await requireUserId();
     const { id } = await params;
     const parsed = AmountSchema.safeParse(await request.json());

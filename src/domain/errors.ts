@@ -56,3 +56,20 @@ export class ConcurrencyError extends DomainError {
     super('CONCURRENT_UPDATE', 409, 'This order is being updated by another request. Try again.');
   }
 }
+
+/**
+ * `user_idem_unique` scopes a key to the user, not to an order or an amount —
+ * so replaying a key against a different order, a different kind, or a
+ * different amount is not the same request being retried. It must be refused,
+ * not silently treated as a replay of whatever was recorded under that key.
+ */
+export class IdempotencyKeyReusedError extends DomainError {
+  constructor(details: Record<string, unknown>) {
+    super(
+      'IDEMPOTENCY_KEY_REUSED',
+      409,
+      'This idempotency key was already used for a different request.',
+      details,
+    );
+  }
+}

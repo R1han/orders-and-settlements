@@ -21,6 +21,13 @@ export async function entryCount(orderId: ObjectId): Promise<number> {
   return (await ledger()).countDocuments({ orderId });
 }
 
-export async function listEntries(orderId: ObjectId): Promise<LedgerEntryDoc[]> {
-  return (await ledger()).find({ orderId }).sort({ seq: 1 }).toArray();
+/**
+ * `userId` is optional only so the brief's own fixture (a single order, a
+ * single user, called as `listEntries(orderId)`) still compiles unchanged.
+ * Every real caller has a userId in hand by this point and should pass it —
+ * ownership is otherwise established once, upstream, by whichever loader ran
+ * first, rather than re-checked at every read.
+ */
+export async function listEntries(orderId: ObjectId, userId?: ObjectId): Promise<LedgerEntryDoc[]> {
+  return (await ledger()).find(userId ? { orderId, userId } : { orderId }).sort({ seq: 1 }).toArray();
 }

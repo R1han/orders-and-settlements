@@ -12,7 +12,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     const { id } = await params;
     // getOrder runs first, so an order owned by another user 404s before any ledger read happens.
     const order = await getOrder(userId, id, new Date());
-    const entries = await listEntries(new ObjectId(order.id));
+    const entries = await listEntries(new ObjectId(order.id), userId);
     return ok({
       ...order,
       entries: entries.map((entry) => ({

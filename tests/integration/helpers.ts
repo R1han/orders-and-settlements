@@ -13,8 +13,14 @@ export function setupTestDb() {
     server = await MongoMemoryReplSet.create({ replSet: { count: 1, storageEngine: 'wiredTiger' } });
     process.env.MONGODB_URI = server.getUri();
     process.env.MONGODB_DB = 'test';
-    const { ensureIndexes } = await import('@/server/db');
+    const { ensureIndexes, ledger } = await import('@/server/db');
     await ensureIndexes();
+
+    // Warm the connection pool before any test runs. The driver opens sockets lazily,
+    // so the first concurrent burst in a file queues on a single socket and the calls
+    // serialise — which silently turns every concurrency test into a sequential one.
+    const warmup = await ledger();
+    await Promise.all(Array.from({ length: 12 }, () => warmup.findOne({})));
   }, 120_000);
 
   beforeEach(async () => {
