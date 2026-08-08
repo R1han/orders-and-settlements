@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import Image from 'next/image';
 import { auth, signOut } from '@/auth';
 import { ToastHost } from '@/components/toast';
 
@@ -11,9 +12,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <header className="border-b border-border bg-surface">
           <div className="mx-auto flex h-14 max-w-[1240px] items-center justify-between px-8">
             <Link href="/" className="flex items-center gap-2.5">
-              <span className="flex h-5 w-5 items-center justify-center rounded-[3px] border-[1.5px] border-brand">
-                <span className="h-[7px] w-[7px] bg-brand" />
-              </span>
+              <Image src="/logo/settlement-mark.svg" alt="" width={20} height={20} className="h-5 w-5" />
               <span className="text-body font-semibold tracking-[-0.01em] text-fg">Settlements</span>
             </Link>
 
