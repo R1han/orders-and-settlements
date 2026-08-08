@@ -20,6 +20,12 @@ export const {
     }),
   ],
   callbacks: {
+    // Without this, `auth` used as middleware never redirects: the library's
+    // default `authorized` result is `true` regardless of session state, so an
+    // unauthenticated request would fall through to the page instead of /login.
+    authorized({ auth: session }) {
+      return Boolean(session?.user);
+    },
     jwt({ token, user }) {
       if (user?.id) token.sub = user.id;
       return token;
