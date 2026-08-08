@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { ObjectId } from 'mongodb';
 import { getOrder } from '@/server/orders';
 import { listEntries } from '@/server/ledger';
+import { orderTimeline } from '@/server/audit';
 import { requireUserId } from '@/server/session';
 import { formatDate, formatMoney, relativeDue } from '@/lib/format';
 import { StatusBadge } from '@/components/status-badge';
@@ -14,6 +15,7 @@ export default async function OrderDetail({ params }: { params: Promise<{ id: st
 
   const order = await getOrder(userId, id, now);
   const entries = await listEntries(new ObjectId(order.id));
+  const timeline = await orderTimeline(userId, new ObjectId(order.id));
 
   const isPaid = order.status === 'paid';
   const locked = entries.length > 0;
@@ -167,6 +169,25 @@ export default async function OrderDetail({ params }: { params: Promise<{ id: st
             );
           })}
         </div>
+      )}
+
+      <h2 className="mb-2.5 mt-[26px] text-section">Audit trail</h2>
+      {timeline.length === 0 ? (
+        <div className="rounded-lg border border-border bg-surface px-5 py-[30px] text-center text-[13px] text-fg-muted">
+          No activity recorded yet.
+        </div>
+      ) : (
+        <ol className="overflow-hidden rounded-lg border border-border bg-surface">
+          {timeline.map((item, index) => (
+            <li key={index}
+                className={`flex items-baseline gap-3 px-4 py-2.5 text-[12.5px] ${
+                  index === 0 ? '' : 'border-t border-[#eef0ef]'}`}>
+              <span className="w-[110px] flex-none text-fg-subtle">{formatDate(item.at)}</span>
+              <span className="min-w-0 flex-1 text-[#3d4a47]">{item.summary}</span>
+              <code className="flex-none font-mono text-[11px] text-fg-subtle">{item.kind}</code>
+            </li>
+          ))}
+        </ol>
       )}
     </div>
   );

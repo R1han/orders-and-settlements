@@ -154,6 +154,51 @@ export async function dashboardSummary(userId: ObjectId, now: Date): Promise<Das
   };
 }
 
+/**
+ * The export reuses the same derivation stages as the dashboard list and
+ * summary, so an exported status can never disagree with a displayed one.
+ * Unlike listOrders, this has no $skip/$limit — the export is meant to cover
+ * everything the filter matches, not one page of it.
+ */
+export async function exportOrders(
+  userId: ObjectId,
+  params: { status?: OrderStatus; from?: Date; to?: Date },
+  now: Date,
+): Promise<OrderView[]> {
+  // ponytail: unpaginated and buffered in memory. Fine for a single user's order
+  // book; stream the cursor into the response if exports ever get large.
+  const rows = await (await orders()).aggregate<Row>(derivationStages(userId, params, now)).toArray();
+  return rows.map(rowToView);
+}
+
+const CSV_COLUMNS = [
+  'ref', 'customer', 'status', 'dueDate',
+  'totalMinor', 'paidMinor', 'refundedMinor', 'netPaidMinor', 'dueMinor',
+] as const;
+
+// Excel and Sheets treat a cell beginning with =, +, - or @ as a formula, so a
+// customer name like "=cmd|' /C calc'!A0" would execute when the export is
+// opened rather than display as text. RFC 4180 quoting (below) does not stop
+// this — a quoted field starting with one of these characters is still parsed
+// as a formula by both applications. The standard mitigation is to prefix the
+// value with a leading apostrophe, which both applications render as plain
+// text and neither includes in the visible cell.
+const FORMULA_PREFIX = /^[=+\-@]/;
+
+function csvCell(value: unknown): string {
+  let text = String(value ?? '');
+  if (FORMULA_PREFIX.test(text)) text = `'${text}`;
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+export function toCsv(rows: OrderView[]): string {
+  const lines = [CSV_COLUMNS.join(',')];
+  for (const row of rows) {
+    lines.push(CSV_COLUMNS.map((column) => csvCell(row[column])).join(','));
+  }
+  return `${lines.join('\n')}\n`;
+}
+
 /** An order document with the derived fields the pipeline adds. */
 export type Row = OrderDoc & {
   paidMinor: number;
