@@ -1,11 +1,11 @@
 import { ObjectId } from 'mongodb';
-import { NotFoundError } from '@/domain/errors';
+import { NotFoundError, OrderLockedError } from '@/domain/errors';
 import { computeTotals } from '@/domain/order';
 import { deriveStatus, dueMinor } from '@/domain/status';
 import type { Balance, LineItem, LineItemInput, OrderStatus } from '@/domain/types';
 import { ZERO_BALANCE } from '@/domain/types';
 import { counters, orders, type OrderDoc } from './db';
-import { latestBalance } from './ledger';
+import { entryCount, latestBalance } from './ledger';
 import { recordAudit } from './audit';
 
 export interface CreateOrderInput {
@@ -122,4 +122,60 @@ export async function loadOwnedOrder(userId: ObjectId, orderId: string): Promise
 export async function getOrder(userId: ObjectId, orderId: string, now: Date): Promise<OrderView> {
   const order = await loadOwnedOrder(userId, orderId);
   return toView(order, await latestBalance(order._id), now);
+}
+
+/**
+ * Orders freeze once money has moved against them. Over-payment validation is
+ * anchored to totalMinor, so a total that changes afterwards retroactively
+ * invalidates every payment already accepted against it. Metadata freezes too,
+ * which makes an order a financial record rather than a mutable row.
+ */
+async function assertUnlocked(order: OrderDoc): Promise<void> {
+  const count = await entryCount(order._id);
+  if (count > 0) throw new OrderLockedError(count);
+}
+
+export async function patchOrder(
+  userId: ObjectId,
+  orderId: string,
+  patch: { customer?: string; dueDate?: Date },
+  now: Date,
+): Promise<OrderView> {
+  const order = await loadOwnedOrder(userId, orderId);
+  await assertUnlocked(order);
+
+  const update: Partial<OrderDoc> = { updatedAt: new Date() };
+  if (patch.customer !== undefined) update.customer = patch.customer.trim();
+  if (patch.dueDate !== undefined) update.dueDate = patch.dueDate;
+
+  await (await orders()).updateOne({ _id: order._id, userId }, { $set: update });
+
+  // Best-effort, deliberately, same as createOrder: the update already committed,
+  // so an audit failure here must not turn a successful patch into a reported error.
+  await recordAudit(userId, order._id, 'order.updated', { fields: Object.keys(patch) }).catch((error) => {
+    console.error('audit write failed for order.updated', { orderId: order._id.toHexString(), error });
+  });
+
+  return toView({ ...order, ...update } as OrderDoc, await latestBalance(order._id), now);
+}
+
+/**
+ * Soft, not hard. "Check no entries exist, then delete" reads one collection and
+ * writes another, so a concurrent payment conflicts with nothing and both commit.
+ * A transaction does not fix that — snapshot isolation permits write skew. Soft
+ * deletion makes the residual race benign: the worst case is an order flagged
+ * deleted that holds one payment, which is recoverable and leaves the ledger intact.
+ */
+export async function softDeleteOrder(userId: ObjectId, orderId: string): Promise<void> {
+  const order = await loadOwnedOrder(userId, orderId);
+  await assertUnlocked(order);
+  await (await orders()).updateOne(
+    { _id: order._id, userId },
+    { $set: { deletedAt: new Date(), updatedAt: new Date() } },
+  );
+
+  // Best-effort, deliberately, same as createOrder.
+  await recordAudit(userId, order._id, 'order.deleted', {}).catch((error) => {
+    console.error('audit write failed for order.deleted', { orderId: order._id.toHexString(), error });
+  });
 }
